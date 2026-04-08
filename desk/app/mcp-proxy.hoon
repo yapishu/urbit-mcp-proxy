@@ -536,7 +536,7 @@
     ?~  req
       ~&  [%mcp-proxy %agg-no-pending group-id sid]
       `this
-    ::  parse the upstream response
+    ::  parse the upstream response (handles both plain JSON and SSE format)
     =/  result-json=(unit json)
       ?.  ?=([%iris %http-response *] sign)  ~
       =/  resp=client-response:iris  client-response.sign
@@ -544,7 +544,9 @@
       ?.  =(200 status-code.response-header.resp)  ~
       ?~  full-file.resp  ~
       =/  body=@t  `@t`q.data.u.full-file.resp
-      (de:json:html body)
+      ::  strip SSE "data: " prefix if present
+      =/  clean=@t  (strip-sse body)
+      (de:json:html clean)
     ::  store result (~ if failed, which is ok)
     =/  new-results=(map server-id:mcp-proxy (unit json))
       (~(put by results.u.req) sid result-json)
@@ -617,6 +619,21 @@
 ::
 |%
 ++  cors  ['access-control-allow-origin' '*']
+::
+++  strip-sse
+  |=  body=@t
+  ^-  @t
+  =/  t=tape  (trip body)
+  ?.  =("data: " (scag 6 t))  body
+  =/  rest=tape  (slag 6 t)
+  ::  trim trailing whitespace/newlines by flipping and dropping
+  %-  crip  %-  flop
+  =/  r=tape  (flop rest)
+  |-  ^-  tape
+  ?~  r  ~
+  ?:  ?|(=(10 i.r) =(13 i.r) =(32 i.r))
+    $(r t.r)
+  r
 ::
 ++  get-base-url
   |=  url=@t
