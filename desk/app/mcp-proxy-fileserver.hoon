@@ -150,10 +150,7 @@
           [%give %fact ~[path] [%http-response-data !>(data.pay)]]
           [%give %kick ~[path] ~]
       ==
-    ?:  ?=(%| sav)  [serve this]
-    :_  this(cash (~(put in cash) url.request))
-    %+  snoc  serve
-    (store url.request ~ auth=auth.sav %payload pay)
+    [serve this]
   ?.  ?=(?(%'GET' %'HEAD') method.request)
     [%| [405 ~] `(as-octs:mimes:html 'read-only resource')]
   =+  ^-  [[ext=(unit @ta) site=(list @t)] args=(list [key=@t value=@t])]

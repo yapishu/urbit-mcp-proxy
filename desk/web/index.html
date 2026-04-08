@@ -13,12 +13,25 @@
       <p class="subtitle">Configure remote MCP server routes for LLMs</p>
     </header>
     <main>
+      <section id="endpoint-section">
+        <h2>MCP Endpoint</h2>
+        <p class="endpoint-desc">All configured servers are accessible at this endpoint.</p>
+        <div class="endpoint-row">
+          <span class="endpoint-label">URL</span>
+          <code class="endpoint-url" id="agg-url" onclick="App.copyUrl(this.textContent)"></code>
+        </div>
+        <div class="endpoint-row">
+          <span class="endpoint-label">Header</span>
+          <code class="endpoint-url" id="agg-cookie" onclick="App.copyUrl(this.textContent)"></code>
+        </div>
+        <div class="endpoint-example" id="endpoint-example"></div>
+      </section>
       <section id="add-server">
         <h2>Add Server</h2>
         <form id="add-form">
           <div class="form-row">
             <label>ID
-              <input type="text" name="id" placeholder="my-server" pattern="[a-z0-9-]+" title="lowercase letters, numbers, hyphens" required>
+              <input type="text" name="id" placeholder="my-server" pattern="[a-z][a-z0-9]*(-[a-z0-9]+)*" title="@tas: lowercase letters, digits, hyphens (e.g. my-server)" required>
             </label>
             <label>Name
               <input type="text" name="name" placeholder="My MCP Server" required>
@@ -29,11 +42,12 @@
               <input type="url" name="url" placeholder="https://example.com/mcp" required>
             </label>
           </div>
-          <div id="headers-container">
+          <div>
             <span class="label-text">Headers</span>
+            <div id="add-headers"></div>
           </div>
           <div class="form-actions">
-            <button type="button" id="add-header-btn" class="secondary">+ Header</button>
+            <button type="button" id="add-header-btn" class="secondary" onclick="App.addHeaderRow(document.getElementById('add-headers'))">+ Header</button>
             <button type="submit">Add Server</button>
           </div>
         </form>
