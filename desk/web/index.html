@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MCP Proxy</title>
+  <link rel="stylesheet" href="/apps/mcp-proxy/css/app.css">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>MCP Proxy</h1>
+      <p class="subtitle">Configure remote MCP server routes for LLMs</p>
+    </header>
+    <main>
+      <section id="add-server">
+        <h2>Add Server</h2>
+        <form id="add-form">
+          <div class="form-row">
+            <label>ID
+              <input type="text" name="id" placeholder="my-server" pattern="[a-z0-9-]+" title="lowercase letters, numbers, hyphens" required>
+            </label>
+            <label>Name
+              <input type="text" name="name" placeholder="My MCP Server" required>
+            </label>
+          </div>
+          <div class="form-row">
+            <label>URL
+              <input type="url" name="url" placeholder="https://example.com/mcp" required>
+            </label>
+          </div>
+          <div id="headers-container">
+            <span class="label-text">Headers</span>
+          </div>
+          <div class="form-actions">
+            <button type="button" id="add-header-btn" class="secondary">+ Header</button>
+            <button type="submit">Add Server</button>
+          </div>
+        </form>
+      </section>
+      <section id="servers-section">
+        <h2>Configured Servers</h2>
+        <div id="servers"></div>
+      </section>
+    </main>
+  </div>
+  <script src="/apps/mcp-proxy/js/api.js"></script>
+  <script src="/apps/mcp-proxy/js/app.js"></script>
+</body>
+</html>
