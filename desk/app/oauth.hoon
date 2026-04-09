@@ -231,13 +231,10 @@
           u.code
           '&redirect_uri='
           redirect-uri.u.cfg
-          '&client_id='
-          client-id.u.cfg
-          '&client_secret='
-          client-secret.u.cfg
           '&code_verifier='
           verifier.u.pend
       ==
+    =/  basic-auth=@t  (make-basic-auth client-id.u.cfg client-secret.u.cfg)
     ::  send token exchange via iris, serve wait page
     ::
     :_  this
@@ -248,6 +245,7 @@
                   token-url.u.cfg
                   :~  ['content-type' 'application/x-www-form-urlencoded']
                       ['accept' 'application/json']
+                      ['authorization' basic-auth]
                   ==
                   `(as-octs:mimes:html body)
               ==
@@ -488,11 +486,8 @@
       :~  'grant_type=refresh_token'
           '&refresh_token='
           u.refresh-token.u.gra
-          '&client_id='
-          client-id.u.cfg
-          '&client_secret='
-          client-secret.u.cfg
       ==
+    =/  basic-auth=@t  (make-basic-auth client-id.u.cfg client-secret.u.cfg)
     :_  this
     :~  :*  %pass  /iris/token-refresh/[pid]
             %arvo  %i  %request
@@ -500,6 +495,7 @@
                 token-url.u.cfg
                 :~  ['content-type' 'application/x-www-form-urlencoded']
                     ['accept' 'application/json']
+                    ['authorization' basic-auth]
                 ==
                 `(as-octs:mimes:html body)
             ==
@@ -537,6 +533,13 @@
 |%
 ::
 ::  PKCE helpers
+::
+++  make-basic-auth
+  |=  [client-id=@t client-secret=@t]
+  ^-  @t
+  =/  creds=@t  (rap 3 ~[client-id ':' client-secret])
+  =/  encoded=@t  (en:base64:mimes:html [(met 3 creds) creds])
+  (rap 3 ~['Basic ' encoded])
 ::
 ++  make-verifier
   |=  eny=@
