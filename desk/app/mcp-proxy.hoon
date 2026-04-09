@@ -1131,7 +1131,7 @@
     [%update-server `@tas`id [name url headers enabled oprov md surl]]
       %'toggle-server'
     [%toggle-server `@tas`((ot ~[id+so]) jon)]
-      %'login-server'
+      %'refresh-spec'
     [%refresh-spec `@tas`((ot ~[id+so]) jon)]
       %'login-server'
     [%login-server `@tas`((ot ~[id+so]) jon)]
