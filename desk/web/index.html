@@ -31,15 +31,33 @@
         <form id="add-form">
           <div class="form-row">
             <label>ID
-              <input type="text" name="id" placeholder="my-server" pattern="[a-z][a-z0-9]*(-[a-z0-9]+)*" title="@tas: lowercase letters, digits, hyphens (e.g. my-server)" required>
+              <input type="text" name="id" placeholder="my-server" pattern="[a-z][a-z0-9]*(-[a-z0-9]+)*" title="lowercase letters, digits, hyphens" required>
             </label>
             <label>Name
               <input type="text" name="name" placeholder="My MCP Server" required>
             </label>
           </div>
           <div class="form-row">
+            <label>Mode
+              <select name="mode" id="add-mode" onchange="App.toggleSchemaUrl('add')">
+                <option value="proxy">Proxy (MCP Server)</option>
+                <option value="openapi">OpenAPI (REST API)</option>
+              </select>
+            </label>
+            <label>OAuth Provider
+              <select name="oauth-provider" id="add-oauth-select" class="oauth-select"><option value="">None</option></select>
+            </label>
+          </div>
+          <div class="form-row">
             <label>URL
               <input type="url" name="url" placeholder="https://example.com/mcp" required>
+              <span class="field-hint" id="add-url-hint">Upstream MCP server endpoint</span>
+            </label>
+          </div>
+          <div class="form-row" id="add-schema-row" style="display:none">
+            <label>Schema URL
+              <input type="url" name="schema-url" placeholder="https://api.example.com/openapi.json">
+              <span class="field-hint">OpenAPI spec URL (JSON)</span>
             </label>
           </div>
           <div>
@@ -47,7 +65,7 @@
             <div id="add-headers"></div>
           </div>
           <div class="form-actions">
-            <button type="button" id="add-header-btn" class="secondary" onclick="App.addHeaderRow(document.getElementById('add-headers'))">+ Header</button>
+            <button type="button" class="secondary" onclick="App.addHeaderRow(document.getElementById('add-headers'))">+ Header</button>
             <button type="submit">Add Server</button>
           </div>
         </form>
@@ -55,6 +73,36 @@
       <section id="servers-section">
         <h2>Configured Servers</h2>
         <div id="servers"></div>
+      </section>
+      <section id="oauth-section">
+        <h2>OAuth Providers</h2>
+        <div id="oauth-providers"></div>
+        <details class="oauth-add-details">
+          <summary>Add OAuth Provider</summary>
+          <form id="oauth-add-form">
+            <div class="form-row">
+              <label>ID <input type="text" name="id" placeholder="x" pattern="[a-z][a-z0-9]*(-[a-z0-9]+)*" required></label>
+              <label>Client ID <input type="text" name="client-id" required></label>
+            </div>
+            <div class="form-row">
+              <label>Client Secret <input type="password" name="client-secret" required></label>
+            </div>
+            <div class="form-row">
+              <label>Auth URL <input type="url" name="auth-url" required></label>
+              <label>Token URL <input type="url" name="token-url" required></label>
+            </div>
+            <div class="form-row">
+              <label>Revoke URL <input type="url" name="revoke-url"></label>
+              <label>Redirect URI <input type="url" name="redirect-uri" required></label>
+            </div>
+            <div class="form-row">
+              <label>Scopes <input type="text" name="scopes" placeholder="read write"></label>
+            </div>
+            <div class="form-actions">
+              <button type="submit">Add Provider</button>
+            </div>
+          </form>
+        </details>
       </section>
     </main>
   </div>

@@ -6,6 +6,7 @@
 ::    or /mcp-proxy/mcp/{server-id} for a single server.
 ::
 /-  mcp-proxy
+/-  oauth
 /+  default-agent, dbug, server
 |%
 +$  card  card:agent:gall
@@ -20,11 +21,12 @@
 --
 ::
 %-  agent:dbug
-=|  state-0:mcp-proxy
+=|  state-2:mcp-proxy
 =*  state  -
 =/  pending  *(map @t @ta)
 =/  cookies  *(map server-id:mcp-proxy @t)
 =/  agg-pending  *(map @t agg-request)
+=/  spec-cache  *(map server-id:mcp-proxy json)
 ^-  agent:gall
 =<
 |_  =bowl:gall
@@ -46,12 +48,41 @@
   =/  old  (mule |.(!<(versioned-state:mcp-proxy old-state)))
   ?:  ?=(%| -.old)
     on-init
-  ?-  -.p.old
-      %0
-    :_  this(state p.old)
+  =/  eyre-cards=(list card)
     :~  [%pass /eyre/connect %arvo %e %connect [~ /mcp-proxy/api] %mcp-proxy]
         [%pass /eyre/mcp %arvo %e %connect [~ /mcp-proxy/mcp] %mcp-proxy]
     ==
+  ?-  -.p.old
+      %2
+    ::  re-fetch specs for openapi servers (cache is non-persisted)
+    =/  spec-cards=(list card)
+      %+  murn  ~(tap by servers.p.old)
+      |=  [sid=server-id:mcp-proxy srv=mcp-server:mcp-proxy]
+      ?.  =(%openapi mode.srv)  ~
+      ?~  schema-url.srv  ~
+      ~&  [%mcp-proxy %refetching-spec sid]
+      %-  some
+      :*  %pass  /iris/spec/[sid]
+          %arvo  %i  %request
+          [%'GET' u.schema-url.srv ~[['accept' 'application/json']] ~]
+          *outbound-config:iris
+      ==
+    :_  this(state p.old)
+    (weld eyre-cards spec-cards)
+  ::
+      %1
+    =/  new-servers=(map server-id:mcp-proxy mcp-server:mcp-proxy)
+      %-  ~(run by servers.p.old)
+      |=(s=mcp-server-1:mcp-proxy [name.s url.s headers.s enabled.s oauth-provider.s %proxy ~])
+    :_  this(state [%2 new-servers server-order.p.old])
+    eyre-cards
+  ::
+      %0
+    =/  new-servers=(map server-id:mcp-proxy mcp-server:mcp-proxy)
+      %-  ~(run by servers.p.old)
+      |=(s=mcp-server-0:mcp-proxy [name.s url.s headers.s enabled.s ~ %proxy ~])
+    :_  this(state [%2 new-servers server-order.p.old])
+    eyre-cards
   ==
 ::
 ++  on-poke
@@ -96,6 +127,8 @@
       ?:  (~(has by servers) id.act)  `this
       =.  servers  (~(put by servers) id.act mcp-server.act)
       =.  server-order  (snoc server-order id.act)
+      ?:  ?&(=(%openapi mode.mcp-server.act) ?=(^ schema-url.mcp-server.act))
+        (fetch-spec id.act u.schema-url.mcp-server.act)
       `this
         %remove-server
       =.  servers  (~(del by servers) id.act)
@@ -110,6 +143,13 @@
       ?~  srv  `this
       =.  servers  (~(put by servers) id.act u.srv(enabled !enabled.u.srv))
       `this
+        %refresh-spec
+      =/  srv=(unit mcp-server:mcp-proxy)  (~(get by servers) id.act)
+      ?~  srv  `this
+      ?.  =(%openapi mode.u.srv)  `this
+      ?~  schema-url.u.srv  `this
+      (fetch-spec id.act u.schema-url.u.srv)
+    ::
         %login-server
       =/  srv=(unit mcp-server:mcp-proxy)  (~(get by servers) id.act)
       ?~  srv
@@ -133,6 +173,18 @@
     :~  :*  %pass  /iris/login/[sid]
             %arvo  %i  %request
             [%'POST' login-url ~[['content-type' 'application/x-www-form-urlencoded']] `(as-octs:mimes:html body)]
+            *outbound-config:iris
+        ==
+    ==
+  ::
+  ++  fetch-spec
+    |=  [sid=server-id:mcp-proxy url=@t]
+    ^-  (quip card _this)
+    ~&  [%mcp-proxy %fetching-spec sid url]
+    :_  this
+    :~  :*  %pass  /iris/spec/[sid]
+            %arvo  %i  %request
+            [%'GET' url ~[['accept' 'application/json']] ~]
             *outbound-config:iris
         ==
     ==
@@ -266,42 +318,91 @@
   ++  fan-out
     |=  [eyre-id=@ta req-id=json method=@t]
     ^-  (quip card _this)
+    =/  result-key=@t
+      ?+  method  'items'
+        %'tools/list'      'tools'
+        %'resources/list'  'resources'
+        %'prompts/list'    'prompts'
+      ==
     =/  enabled=(list [server-id:mcp-proxy mcp-server:mcp-proxy])
       %+  skim
         %+  turn  server-order
         |=(sid=server-id:mcp-proxy [sid (~(got by servers) sid)])
       |=([* srv=mcp-server:mcp-proxy] enabled.srv)
     ?~  enabled
-      ::  no servers: return empty
-      =/  key=@t
-        ?+  method  'items'
-          %'tools/list'      'tools'
-          %'resources/list'  'resources'
-          %'prompts/list'    'prompts'
-        ==
       =/  resp=json
         %-  pairs:enjs:format
-        :~  ['jsonrpc' s+'2.0']
-            ['id' req-id]
-            ['result' (pairs:enjs:format ~[[key a+~]])]
+        :~  ['jsonrpc' s+'2.0']  ['id' req-id]
+            ['result' (pairs:enjs:format ~[[result-key a+~]])]
         ==
       :_  this
       (give-http eyre-id 200 ~[cors ['content-type' 'application/json']] (some (as-octs:mimes:html (en:json:html resp))))
-    =/  group-id=@t  (scot %uv `@uv`eny.bowl)
+    ::  separate proxy servers (need Iris) from openapi servers (local)
+    =/  all=(list [server-id:mcp-proxy mcp-server:mcp-proxy])
+      (turn enabled |=([sid=server-id:mcp-proxy srv=mcp-server:mcp-proxy] [sid srv]))
+    =/  proxy-servers=(list [server-id:mcp-proxy mcp-server:mcp-proxy])
+      (skim all |=([sid=server-id:mcp-proxy srv=mcp-server:mcp-proxy] =(%proxy mode.srv)))
+    =/  openapi-servers=(list [server-id:mcp-proxy mcp-server:mcp-proxy])
+      (skim all |=([sid=server-id:mcp-proxy srv=mcp-server:mcp-proxy] =(%openapi mode.srv)))
+    ::  generate openapi results locally from cached specs
+    =/  local-results=(map server-id:mcp-proxy (unit json))
+      %-  ~(gas by *(map server-id:mcp-proxy (unit json)))
+      %+  turn  openapi-servers
+      |=  [sid=server-id:mcp-proxy srv=mcp-server:mcp-proxy]
+      =/  spec=(unit json)  (~(get by spec-cache) sid)
+      ?~  spec  [sid ~]
+      ?.  =(%'tools/list' method)
+        ::  openapi only supports tools for now
+        [sid `(pairs:enjs:format ~[['jsonrpc' s+'2.0'] ['id' (numb:enjs:format 1)] ['result' (pairs:enjs:format ~[[result-key a+~]])]])]
+      =/  tools=(list json)  (spec-to-tools sid u.spec)
+      [sid `(pairs:enjs:format ~[['jsonrpc' s+'2.0'] ['id' (numb:enjs:format 1)] ['result' (pairs:enjs:format ~[['tools' a+tools]])]])]
     =/  total=@ud  (lent enabled)
+    ::  if no proxy servers, respond immediately with local results
+    ?.  ?=(^ proxy-servers)
+      =.  agg-pending
+        (~(put by agg-pending) 'immediate' [eyre-id req-id method total local-results])
+      ::  trigger immediate aggregation via the on-arvo path - but we have all results
+      ::  just combine and respond directly
+      =/  name-key=@t
+        ?+  method  'name'
+          %'tools/list'  'name'  %'resources/list'  'uri'  %'prompts/list'  'name'
+        ==
+      =/  all-items=(list json)
+        %-  zing
+        %+  turn  ~(tap by local-results)
+        |=  [s-id=server-id:mcp-proxy res=(unit json)]
+        ?~  res  ~
+        =/  result=json  (get-json-field u.res 'result')
+        ?.  ?=(%o -.result)  ~
+        =/  items-json=(unit json)  (~(get by p.result) result-key)
+        ?~  items-json  ~
+        ?.  ?=(%a -.u.items-json)  ~
+        %+  turn  p.u.items-json
+        |=  item=json
+        ?.  ?=(%o -.item)  item
+        =/  orig-name=@t
+          =/  n=(unit json)  (~(get by p.item) name-key)
+          ?~  n  ''  ?.  ?=(%s -.u.n)  ''  p.u.n
+        [%o (~(put by p.item) name-key s+(cat 3 (cat 3 (scot %tas s-id) '_') orig-name))]
+      =/  resp=json
+        %-  pairs:enjs:format
+        :~  ['jsonrpc' s+'2.0']  ['id' req-id]
+            ['result' (pairs:enjs:format ~[[result-key a+all-items]])]
+        ==
+      :_  this
+      (give-http eyre-id 200 ~[cors ['content-type' 'application/json']] (some (as-octs:mimes:html (en:json:html resp))))
+    ::  has proxy servers: set up agg-pending with local results pre-populated
+    =/  group-id=@t  (scot %uv `@uv`eny.bowl)
     =.  agg-pending
-      (~(put by agg-pending) group-id [eyre-id req-id method total ~])
-    ::  build upstream request body
+      (~(put by agg-pending) group-id [eyre-id req-id method total local-results])
     =/  upstream-body=@t
       %-  en:json:html
       %-  pairs:enjs:format
-      :~  ['jsonrpc' s+'2.0']
-          ['method' s+method]
-          ['id' (numb:enjs:format 1)]
-          ['params' (pairs:enjs:format ~)]
+      :~  ['jsonrpc' s+'2.0']  ['method' s+method]
+          ['id' (numb:enjs:format 1)]  ['params' (pairs:enjs:format ~)]
       ==
     :_  this
-    %+  turn  enabled
+    %+  turn  proxy-servers
     |=  [sid=server-id:mcp-proxy srv=mcp-server:mcp-proxy]
     =/  out-headers=(list [key=@t value=@t])
       %+  weld
@@ -310,6 +411,10 @@
     =/  cookie=(unit @t)  (~(get by cookies) sid)
     =?  out-headers  ?=(^ cookie)
       (snoc out-headers ['cookie' u.cookie])
+    =/  oauth-hdr=(unit [key=@t value=@t])
+      (get-oauth-header oauth-provider.srv our.bowl now.bowl)
+    =?  out-headers  ?=(^ oauth-hdr)
+      (snoc out-headers u.oauth-hdr)
     :*  %pass  /iris/agg/[group-id]/[sid]
         %arvo  %i  %request
         [%'POST' url.srv out-headers `(as-octs:mimes:html upstream-body)]
@@ -321,16 +426,13 @@
   ++  route-call
     |=  [eyre-id=@ta req=inbound-request:eyre jon=json method=@t]
     ^-  (quip card _this)
-    ::  extract the name field from params
     =/  params=json  (get-json-field jon 'params')
+    =/  req-id=json  (get-json-field jon 'id')
     =/  name-key=@t
       ?+  method  'name'
-        %'tools/call'     'name'
-        %'resources/read'  'uri'
-        %'prompts/get'     'name'
+        %'tools/call'  'name'  %'resources/read'  'uri'  %'prompts/get'  'name'
       ==
     =/  full-name=@t  (get-json-string params name-key)
-    ::  split on first _ to get server-id and real name
     =/  [sid=@t real-name=@t]  (split-on-underscore full-name)
     =/  srv=(unit mcp-server:mcp-proxy)  (~(get by servers) `@tas`sid)
     ?~  srv
@@ -338,7 +440,68 @@
       %-  give-http  :^  eyre-id  404
       ~[cors ['content-type' 'application/json']]
       (some (as-octs:mimes:html '{"error":"server not found in tool prefix"}'))
-    ::  rebuild request with original name
+    ::  build auth headers
+    =/  out-headers=(list [key=@t value=@t])
+      %+  weld
+        ~[['accept' 'application/json']]
+      headers.u.srv
+    =/  cookie=(unit @t)  (~(get by cookies) `@tas`sid)
+    =?  out-headers  ?=(^ cookie)
+      (snoc out-headers ['cookie' u.cookie])
+    =/  oauth-hdr=(unit [key=@t value=@t])
+      (get-oauth-header oauth-provider.u.srv our.bowl now.bowl)
+    =?  out-headers  ?=(^ oauth-hdr)
+      (snoc out-headers u.oauth-hdr)
+    ::  openapi mode: make direct REST API call
+    ?:  =(%openapi mode.u.srv)
+      =/  spec=(unit json)  (~(get by spec-cache) `@tas`sid)
+      ?~  spec
+        :_  this
+        %-  give-http  :^  eyre-id  500
+        ~[cors ['content-type' 'application/json']]
+        (some (as-octs:mimes:html '{"error":"spec not cached, try again"}'))
+      =/  op=(unit [path=@t method=@t operation=json])
+        (find-operation u.spec real-name)
+      ?~  op
+        :_  this
+        %-  give-http  :^  eyre-id  404
+        ~[cors ['content-type' 'application/json']]
+        (some (as-octs:mimes:html '{"error":"operation not found in spec"}'))
+      ::  extract arguments from params
+      =/  args=json
+        =/  a=(unit json)  ?.(?=(%o -.params) ~ (~(get by p.params) 'arguments'))
+        (fall a params)
+      ::  build API URL with path params and query string
+      =/  op-params=(list json)
+        =/  v=(unit json)  ?.(?=(%o -.operation.u.op) ~ (~(get by p.operation.u.op) 'parameters'))
+        ?~  v  ~  ?.(?=(%a -.u.v) ~ p.u.v)
+      =/  api-url=@t
+        =/  base-with-path=@t  (build-api-url url.u.srv path.u.op args)
+        =/  qs=@t  (build-query-string op-params args)
+        (cat 3 base-with-path qs)
+      ::  build body for POST/PUT/PATCH
+      =/  req-method=method:http
+        ?+  method.u.op  %'GET'
+          %'get'  %'GET'  %'post'  %'POST'  %'put'  %'PUT'
+          %'patch'  %'PATCH'  %'delete'  %'DELETE'
+        ==
+      =/  has-body=?
+        ?|  =(req-method %'POST')
+            =(req-method %'PUT')
+            =(req-method %'PATCH')
+        ==
+      =/  body=(unit octs)
+        ?.  has-body  ~
+        `(as-octs:mimes:html (en:json:html args))
+      =?  out-headers  has-body
+        [['content-type' 'application/json'] out-headers]
+      =/  wire-id=@t  (scot %uv `@uv`eny.bowl)
+      =.  pending  (~(put by pending) wire-id eyre-id)
+      =/  =request:http  [req-method api-url out-headers body]
+      :_  this
+      :~  [%pass /iris/apicall/[wire-id] %arvo %i %request request *outbound-config:iris]
+      ==
+    ::  proxy mode: forward as MCP request
     =/  new-params=json
       ?>  ?=(%o -.params)
       [%o (~(put by p.params) name-key s+real-name)]
@@ -346,14 +509,7 @@
       %-  en:json:html
       ?>  ?=(%o -.jon)
       [%o (~(put by p.jon) 'params' new-params)]
-    ::  forward as proxy request
-    =/  out-headers=(list [key=@t value=@t])
-      %+  weld
-        ~[['content-type' 'application/json'] ['accept' 'application/json']]
-      headers.u.srv
-    =/  cookie=(unit @t)  (~(get by cookies) `@tas`sid)
-    =?  out-headers  ?=(^ cookie)
-      (snoc out-headers ['cookie' u.cookie])
+    =.  out-headers  [['content-type' 'application/json'] out-headers]
     =/  wire-id=@t  (scot %uv `@uv`eny.bowl)
     =.  pending  (~(put by pending) wire-id eyre-id)
     :_  this
@@ -403,6 +559,10 @@
     =/  cookie=(unit @t)  (~(get by cookies) sid)
     =?  out-headers  ?=(^ cookie)
       (snoc out-headers ['cookie' u.cookie])
+    =/  oauth-hdr=(unit [key=@t value=@t])
+      (get-oauth-header oauth-provider.u.srv our.bowl now.bowl)
+    =?  out-headers  ?=(^ oauth-hdr)
+      (snoc out-headers u.oauth-hdr)
     =/  session-id=(unit @t)
       =/  hdrs=(list [key=@t value=@t])  header-list.request.req
       |-
@@ -439,6 +599,14 @@
             ['url' s+url.srv]
             ['enabled' b+enabled.srv]
             ['authenticated' b+has-cookie]
+            ['mode' s+?:(?=(%proxy mode.srv) 'proxy' 'openapi')]
+            :-  'schemaUrl'
+            ?~  schema-url.srv  ~
+            s+u.schema-url.srv
+            :-  'oauthProvider'
+            ?~  oauth-provider.srv  ~
+            s+(scot %tas u.oauth-provider.srv)
+            ['hasCachedSpec' b+(~(has by spec-cache) sid)]
             :-  'headers'
             :-  %a
             %+  turn  headers.srv
@@ -465,6 +633,31 @@
       ~?  !accepted.sign  [%mcp-proxy %binding-rejected binding.sign]
       `this
     `this
+  ::
+      [%iris %spec @ ~]
+    ::  OpenAPI spec fetch response
+    ::
+    =/  sid=server-id:mcp-proxy  i.t.t.wire
+    ?.  ?=([%iris %http-response *] sign)
+      ~&  [%mcp-proxy %spec-fetch-failed sid %bad-sign]
+      `this
+    =/  resp=client-response:iris  client-response.sign
+    ?.  ?=(%finished -.resp)
+      ~&  [%mcp-proxy %spec-fetch-failed sid %not-finished]
+      `this
+    ?.  =(200 status-code.response-header.resp)
+      ~&  [%mcp-proxy %spec-fetch-failed sid %status status-code.response-header.resp]
+      `this
+    ?~  full-file.resp
+      ~&  [%mcp-proxy %spec-fetch-failed sid %no-body]
+      `this
+    =/  body=@t  `@t`q.data.u.full-file.resp
+    =/  jon=(unit json)  (de:json:html body)
+    ?~  jon
+      ~&  [%mcp-proxy %spec-fetch-failed sid %bad-json]
+      `this
+    ~&  [%mcp-proxy %spec-cached sid]
+    `this(spec-cache (~(put by spec-cache) sid u.jon))
   ::
       [%iris %login @ ~]
     =/  sid=server-id:mcp-proxy  i.t.t.wire
@@ -493,6 +686,60 @@
       `this
     ~&  [%mcp-proxy %login-ok sid]
     `this(cookies (~(put by cookies) sid u.cookie))
+  ::
+      [%iris %apicall @ ~]
+    ::  OpenAPI REST call response: wrap in MCP tools/call result
+    ::
+    =/  wire-id=@t  i.t.t.wire
+    =/  eid=(unit @ta)  (~(get by pending) wire-id)
+    ?~  eid
+      ~&  [%mcp-proxy %no-pending-apicall wire-id]
+      `this
+    =.  pending  (~(del by pending) wire-id)
+    ?.  ?=([%iris %http-response *] sign)
+      :_  this
+      %-  give-http  :^  u.eid  502
+      ~[cors ['content-type' 'application/json']]
+      (some (as-octs:mimes:html '{"error":"api call failed"}'))
+    =/  resp=client-response:iris  client-response.sign
+    ?.  ?=(%finished -.resp)
+      :_  this
+      %-  give-http  :^  u.eid  502
+      ~[cors ['content-type' 'application/json']]
+      (some (as-octs:mimes:html '{"error":"api call in progress"}'))
+    =/  body-text=@t
+      ?~  full-file.resp  ''
+      `@t`q.data.u.full-file.resp
+    ::  wrap in MCP JSON-RPC response format
+    =/  is-error=?  (gte status-code.response-header.resp 400)
+    =/  mcp-resp=json
+      %-  pairs:enjs:format
+      :~  ['jsonrpc' s+'2.0']
+          ['id' (numb:enjs:format 1)]
+          :-  'result'
+          %-  pairs:enjs:format
+          :~  :-  'content'
+              :-  %a
+              :~  %-  pairs:enjs:format
+                  :~  ['type' s+'text']
+                      ['text' s+body-text]
+                  ==
+              ==
+              ['isError' b+is-error]
+          ==
+      ==
+    =/  resp-body=@t  (en:json:html mcp-resp)
+    :_  this
+    =/  resp-headers=(list [key=@t value=@t])
+      :~  cors
+          ['content-type' 'application/json']
+          ['access-control-expose-headers' 'Mcp-Session-Id']
+      ==
+    =/  =path  /http-response/[u.eid]
+    :~  [%give %fact ~[path] %http-response-header !>(`response-header:http`[200 resp-headers])]
+        [%give %fact ~[path] %http-response-data !>(`(unit octs)`(some (as-octs:mimes:html resp-body)))]
+        [%give %kick ~[path] ~]
+    ==
   ::
       [%iris %proxy @ ~]
     =/  wire-id=@t  i.t.t.wire
@@ -620,6 +867,176 @@
 |%
 ++  cors  ['access-control-allow-origin' '*']
 ::
+++  http-methods  (silt ~['get' 'post' 'put' 'patch' 'delete'])
+::
+::  convert an OpenAPI spec to a list of MCP tool JSON objects
+::
+++  spec-to-tools
+  |=  [sid=server-id:mcp-proxy spec=json]
+  ^-  (list json)
+  =/  paths=json  (get-json-field spec 'paths')
+  ?.  ?=(%o -.paths)  ~
+  =/  result=(list json)  ~
+  =/  items=(list [@t json])  ~(tap by p.paths)
+  |-
+  ?~  items  (flop result)
+  =/  [path-str=@t path-item=json]  i.items
+  ?.  ?=(%o -.path-item)  $(items t.items)
+  =/  meths=(list [@t json])  ~(tap by p.path-item)
+  =/  path-tools=(list json)
+    =/  ml=(list [@t json])  meths
+    |-
+    ?~  ml  ~
+    =/  [meth=@t op=json]  i.ml
+    ?.  (~(has in http-methods) meth)  $(ml t.ml)
+    ?.  ?=(%o -.op)  $(ml t.ml)
+    =/  op-id=@t  (get-json-string op 'operationId')
+    ?:  =('' op-id)  $(ml t.ml)
+    =/  desc=@t  (get-json-string op 'summary')
+    =?  desc  =('' desc)  (get-json-string op 'description')
+    ::  skip streaming/webhook by tag
+    =/  skip=?
+      =/  tags=(unit json)  (~(get by p.op) 'tags')
+      ?~  tags  %.n
+      ?.  ?=(%a -.u.tags)  %.n
+      %+  lien  p.u.tags
+      |=  tag=json
+      ?.  ?=(%s -.tag)  %.n
+      =/  lo=tape  (cass (trip p.tag))
+      ?|  !=(~ (find "stream" lo))
+          !=(~ (find "webhook" lo))
+      ==
+    ?:  skip  $(ml t.ml)
+    ::  build tool with empty schema (params added later if needed)
+    =/  tool=json
+      %-  pairs:enjs:format
+      :~  ['name' s+op-id]
+          ['description' s+desc]
+          :-  'inputSchema'
+          %-  pairs:enjs:format
+          :~  ['type' s+'object']
+              ['properties' [%o ~]]
+              ['required' a+~]
+          ==
+      ==
+    [tool $(ml t.ml)]
+  $(items t.items, result (weld path-tools result))
+::
+::  find an OpenAPI operation by operationId and return [path method operation]
+::
+++  find-operation
+  |=  [spec=json op-id=@t]
+  ^-  (unit [path=@t method=@t operation=json])
+  =/  paths=json  (get-json-field spec 'paths')
+  ?.  ?=(%o -.paths)  ~
+  =/  items=(list [@t json])  ~(tap by p.paths)
+  |-
+  ?~  items  ~
+  =/  [path-str=@t path-item=json]  i.items
+  ?.  ?=(%o -.path-item)
+    $(items t.items)
+  =/  methods=(list [@t json])  ~(tap by p.path-item)
+  =/  found=(unit [path=@t method=@t operation=json])
+    =/  ml=(list [@t json])  methods
+    |-
+    ?~  ml  ~
+    =/  [m=@t op=json]  i.ml
+    ?.  (~(has in http-methods) m)  $(ml t.ml)
+    ?.  ?=(%o -.op)  $(ml t.ml)
+    =/  this-id=@t  (get-json-string op 'operationId')
+    ?:  =(this-id op-id)  `[path-str m op]
+    $(ml t.ml)
+  ?^  found  found
+  $(items t.items)
+::
+::  build an HTTP request URL from an OpenAPI path template + args
+::
+++  build-api-url
+  |=  [base=@t path-template=@t args=json]
+  ^-  @t
+  ::  substitute {param} in the path with values from args
+  =/  base-t=tape  (trip base)
+  ::  strip trailing / from base
+  =?  base-t  &(!=(~ base-t) =('/' (rear base-t)))
+    (snip base-t)
+  =/  path-t=tape  (trip path-template)
+  =/  result=tape  base-t
+  =/  i=@ud  0
+  |-
+  ?:  (gte i (lent path-t))
+    (crip result)
+  =/  c=@  (snag i path-t)
+  ?.  =(c '{')
+    $(result (snoc result c), i +(i))
+  ::  find closing }
+  =/  rest=tape  (slag +(i) path-t)
+  =/  close=(unit @ud)  (find "}" rest)
+  ?~  close
+    $(result (snoc result c), i +(i))
+  =/  param-name=@t  (crip (scag u.close rest))
+  =/  param-val=@t  (get-json-string args param-name)
+  =/  val-tape=tape  (trip param-val)
+  $(result (weld result val-tape), i (add i (add 2 u.close)))
+::
+::  build query string from OpenAPI params + args
+::
+++  build-query-string
+  |=  [params=(list json) args=json]
+  ^-  @t
+  ?.  ?=(%o -.args)  ''
+  =/  query-parts=(list @t)
+    %+  murn  params
+    |=  param=json
+    ?.  ?=(%o -.param)  ~
+    =/  pin=@t  (get-json-string param 'in')
+    ?.  =(pin 'query')  ~
+    =/  pname=@t  (get-json-string param 'name')
+    =/  val=(unit json)  (~(get by p.args) pname)
+    ?~  val  ~
+    ?.  ?=(%s -.u.val)  ~
+    ?:  =('' p.u.val)  ~
+    `(cat 3 pname (cat 3 '=' p.u.val))
+  ?~  query-parts  ''
+  =/  result=@t  i.query-parts
+  =/  rest=(list @t)  t.query-parts
+  |-
+  ?~  rest  (cat 3 '?' result)
+  $(result (cat 3 result (cat 3 '&' i.rest)), rest t.rest)
+::
+++  get-optional-string
+  |=  [jon=json key=@t]
+  ^-  (unit @t)
+  ?.  ?=(%o -.jon)  ~
+  =/  v=(unit json)  (~(get by p.jon) key)
+  ?~  v  ~
+  ?.  ?=(%s -.u.v)  ~
+  ?:  =('' p.u.v)  ~
+  `p.u.v
+::
+++  get-optional-tas
+  |=  [jon=json key=@t]
+  ^-  (unit @tas)
+  ?.  ?=(%o -.jon)  ~
+  =/  v=(unit json)  (~(get by p.jon) key)
+  ?~  v  ~
+  ?.  ?=(%s -.u.v)  ~
+  ?:  =('' p.u.v)  ~
+  ``@tas`p.u.v
+::
+++  get-oauth-header
+  |=  [oauth-prov=(unit @tas) our=@p now=@da]
+  ^-  (unit [key=@t value=@t])
+  ?~  oauth-prov  ~
+  =/  has=?
+    =/  res  (mule |.(.^(? %gx /(scot %p our)/oauth/(scot %da now)/has-grant/[u.oauth-prov]/noun)))
+    ?:(?=(%& -.res) p.res %.n)
+  ?.  has  ~
+  =/  gra=(unit grant:oauth)
+    =/  res  (mule |.(.^(grant:oauth %gx /(scot %p our)/oauth/(scot %da now)/grant/[u.oauth-prov]/noun)))
+    ?:(?=(%& -.res) `p.res ~)
+  ?~  gra  ~
+  `['authorization' (rap 3 ~[token-type.u.gra ' ' access-token.u.gra])]
+::
 ++  strip-sse
   |=  body=@t
   ^-  @t
@@ -650,6 +1067,7 @@
 ++  get-json-field
   |=  [jon=json key=@t]
   ^-  json
+  ?~  jon  ~
   ?.  ?=(%o -.jon)  ~
   (fall (~(get by p.jon) key) ~)
 ::
@@ -657,6 +1075,7 @@
   |=  [jon=json key=@t]
   ^-  @t
   =/  v=json  (get-json-field jon key)
+  ?~  v  ''
   ?.  ?=(%s -.v)  ''
   p.v
 ::
@@ -688,7 +1107,12 @@
           headers+(ar (ot ~[key+so value+so]))
       ==
     =/  [id=@t name=@t url=@t headers=(list header:mcp-proxy)]  (f jon)
-    [%add-server `@tas`id [name url headers %.y]]
+    =/  oprov=(unit @tas)  (get-optional-tas jon 'oauth-provider')
+    =/  surl=(unit @t)  (get-optional-string jon 'schema-url')
+    =/  md=server-mode:mcp-proxy
+      =/  m=@t  (get-json-string jon 'mode')
+      ?:(=('openapi' m) %openapi %proxy)
+    [%add-server `@tas`id [name url headers %.y oprov md surl]]
       %'remove-server'
     [%remove-server `@tas`((ot ~[id+so]) jon)]
       %'update-server'
@@ -699,9 +1123,16 @@
           enabled+bo
       ==
     =/  [id=@t name=@t url=@t headers=(list header:mcp-proxy) enabled=?]  (f jon)
-    [%update-server `@tas`id [name url headers enabled]]
+    =/  oprov=(unit @tas)  (get-optional-tas jon 'oauth-provider')
+    =/  surl=(unit @t)  (get-optional-string jon 'schema-url')
+    =/  md=server-mode:mcp-proxy
+      =/  m=@t  (get-json-string jon 'mode')
+      ?:(=('openapi' m) %openapi %proxy)
+    [%update-server `@tas`id [name url headers enabled oprov md surl]]
       %'toggle-server'
     [%toggle-server `@tas`((ot ~[id+so]) jon)]
+      %'login-server'
+    [%refresh-spec `@tas`((ot ~[id+so]) jon)]
       %'login-server'
     [%login-server `@tas`((ot ~[id+so]) jon)]
   ==
