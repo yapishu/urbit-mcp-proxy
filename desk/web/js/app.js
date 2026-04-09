@@ -63,10 +63,13 @@ var App = {
       var name = form.elements.name.value.trim();
       var url = form.elements.url.value.trim();
       var headers = self.getHeadersFromForm('add');
+      var mode = form.elements.mode.value;
       var oauthProv = form.elements['oauth-provider'].value || null;
+      var schemaUrl = form.elements['schema-url'] ? form.elements['schema-url'].value.trim() : '';
       if (!id || !name || !url) return;
-      McpProxyAPI.addServer(id, name, url, headers, oauthProv).then(function() {
+      McpProxyAPI.addServer(id, name, url, headers, {mode: mode, oauthProvider: oauthProv, schemaUrl: schemaUrl || null}).then(function() {
         form.reset();
+        document.getElementById('add-schema-row').style.display = 'none';
         var rows = document.querySelectorAll('#add-headers .header-row');
         for (var i = 0; i < rows.length; i++) rows[i].remove();
         self.loadAll();
@@ -123,6 +126,14 @@ var App = {
     container.appendChild(row);
   },
 
+  toggleSchemaUrl: function(prefix) {
+    var mode = document.getElementById(prefix + '-mode').value;
+    var row = document.getElementById(prefix + '-schema-row');
+    var hint = document.getElementById(prefix + '-url-hint');
+    if (row) row.style.display = mode === 'openapi' ? '' : 'none';
+    if (hint) hint.textContent = mode === 'openapi' ? 'API base URL (e.g. https://api.x.com)' : 'Upstream MCP server endpoint';
+  },
+
   editServer: function(id) { this.editing = id; this.render(); this.populateOAuthSelects(); },
   cancelEdit: function() { this.editing = null; this.render(); },
 
@@ -133,10 +144,20 @@ var App = {
     var url = card.querySelector('.edit-url').value.trim();
     var headers = this.getHeadersFromForm('edit-h-' + id);
     var oauthProv = card.querySelector('.edit-oauth').value || null;
+    var mode = card.querySelector('.edit-mode').value;
+    var schemaInput = card.querySelector('.edit-schema-url');
+    var schemaUrl = schemaInput ? schemaInput.value.trim() : '';
     var s = this.servers.find(function(x) { return x.id === id; });
     if (!name || !url) return;
-    McpProxyAPI.updateServer(id, name, url, headers, s ? s.enabled : true, oauthProv).then(function() {
+    McpProxyAPI.updateServer(id, name, url, headers, s ? s.enabled : true, {mode: mode, oauthProvider: oauthProv, schemaUrl: schemaUrl || null}).then(function() {
       self.editing = null; self.loadAll(); self.toast('Server updated');
+    }).catch(function(e) { alert('Failed: ' + e.message); });
+  },
+
+  refreshSpec: function(id) {
+    McpProxyAPI.refreshSpec(id).then(function() {
+      App.toast('Fetching spec...');
+      setTimeout(function() { App.loadAll(); }, 3000);
     }).catch(function(e) { alert('Failed: ' + e.message); });
   },
 
@@ -179,6 +200,7 @@ var App = {
   },
 
   renderEditCard: function(s) {
+    var isOpenapi = s.mode === 'openapi';
     var headersHtml = '<div id="edit-h-' + s.id + '-headers">';
     if (s.headers) {
       for (var j = 0; j < s.headers.length; j++) {
@@ -187,9 +209,14 @@ var App = {
     }
     headersHtml += '</div>';
     return '<div class="server-card editing" id="edit-' + s.id + '">' +
-      '<div class="form-row"><label>Name<input type="text" class="edit-name" value="' + this.esc(s.name) + '"></label></div>' +
+      '<div class="form-row"><label>Name<input type="text" class="edit-name" value="' + this.esc(s.name) + '"></label>' +
+      '<label>Mode<select class="edit-mode" onchange="App.toggleSchemaUrl(\'edit-' + s.id + '\')" id="edit-' + s.id + '-mode">' +
+        '<option value="proxy"' + (isOpenapi ? '' : ' selected') + '>Proxy</option>' +
+        '<option value="openapi"' + (isOpenapi ? ' selected' : '') + '>OpenAPI</option></select></label></div>' +
       '<div class="form-row"><label>URL<input type="url" class="edit-url" value="' + this.esc(s.url) + '"></label>' +
       '<label>OAuth<select class="edit-oauth oauth-select"><option value="">None</option></select></label></div>' +
+      '<div class="form-row" id="edit-' + s.id + '-schema-row" style="' + (isOpenapi ? '' : 'display:none') + '">' +
+        '<label>Schema URL<input type="url" class="edit-schema-url" value="' + this.esc(s.schemaUrl || '') + '"></label></div>' +
       '<span class="label-text">Headers</span>' + headersHtml +
       '<div class="server-actions">' +
         '<button class="secondary" onclick="App.addHeaderRow(document.getElementById(\'edit-h-' + s.id + '-headers\'))">+ Header</button>' +
@@ -215,14 +242,17 @@ var App = {
         for (var j = 0; j < s.headers.length; j++) names.push(s.headers[j].key);
         headersHtml = '<div class="server-headers-display">Headers: ' + this.esc(names.join(', ')) + '</div>';
       }
-      var oauthHtml = s.oauthProvider ? '<div class="server-oauth">OAuth: <span class="badge connected">' + this.esc(s.oauthProvider) + '</span></div>' : '';
+      var oauthHtml = s.oauthProvider ? '<div class="server-detail">OAuth: <span class="badge connected">' + this.esc(s.oauthProvider) + '</span></div>' : '';
+      var modeHtml = '<span class="badge ' + (s.mode === 'openapi' ? 'openapi' : 'proxy-badge') + '">' + s.mode + '</span>';
+      var specHtml = (s.mode === 'openapi' && s.schemaUrl) ? '<div class="server-detail">Schema: ' + this.esc(s.schemaUrl) + (s.hasCachedSpec ? ' <span class="badge connected">cached</span>' : ' <span class="badge disconnected">not cached</span>') + '</div>' : '';
       html += '<div class="server-card">' +
         '<div class="server-header"><span class="server-name">' + this.esc(s.name) + ' <span class="server-id">' + this.esc(s.id) + '</span></span>' +
-        '<span class="badge ' + statusClass + '">' + (s.enabled ? 'enabled' : 'disabled') + '</span></div>' +
+        '<span>' + modeHtml + ' <span class="badge ' + statusClass + '">' + (s.enabled ? 'enabled' : 'disabled') + '</span></span></div>' +
         '<div class="server-url">' + this.esc(s.url) + '</div>' +
-        headersHtml + oauthHtml +
+        headersHtml + specHtml + oauthHtml +
         '<div class="server-actions">' +
           '<button onclick="App.editServer(\'' + s.id + '\')">Edit</button>' +
+          (s.mode === 'openapi' ? '<button class="secondary" onclick="App.refreshSpec(\'' + s.id + '\')">Reload Schema</button>' : '') +
           '<button onclick="App.toggleServer(\'' + s.id + '\')">' + (s.enabled ? 'Disable' : 'Enable') + '</button>' +
           '<button class="danger" onclick="App.removeServer(\'' + s.id + '\')">Remove</button>' +
         '</div></div>';

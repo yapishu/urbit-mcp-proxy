@@ -31,18 +31,33 @@
         <form id="add-form">
           <div class="form-row">
             <label>ID
-              <input type="text" name="id" placeholder="my-server" pattern="[a-z][a-z0-9]*(-[a-z0-9]+)*" title="@tas: lowercase letters, digits, hyphens (e.g. my-server)" required>
+              <input type="text" name="id" placeholder="my-server" pattern="[a-z][a-z0-9]*(-[a-z0-9]+)*" title="lowercase letters, digits, hyphens" required>
             </label>
             <label>Name
               <input type="text" name="name" placeholder="My MCP Server" required>
             </label>
           </div>
           <div class="form-row">
-            <label>URL
-              <input type="url" name="url" placeholder="https://example.com/mcp" required>
+            <label>Mode
+              <select name="mode" id="add-mode" onchange="App.toggleSchemaUrl('add')">
+                <option value="proxy">Proxy (MCP Server)</option>
+                <option value="openapi">OpenAPI (REST API)</option>
+              </select>
             </label>
             <label>OAuth Provider
               <select name="oauth-provider" id="add-oauth-select" class="oauth-select"><option value="">None</option></select>
+            </label>
+          </div>
+          <div class="form-row">
+            <label>URL
+              <input type="url" name="url" placeholder="https://example.com/mcp" required>
+              <span class="field-hint" id="add-url-hint">Upstream MCP server endpoint</span>
+            </label>
+          </div>
+          <div class="form-row" id="add-schema-row" style="display:none">
+            <label>Schema URL
+              <input type="url" name="schema-url" placeholder="https://api.example.com/openapi.json">
+              <span class="field-hint">OpenAPI spec URL (JSON)</span>
             </label>
           </div>
           <div>
@@ -50,7 +65,7 @@
             <div id="add-headers"></div>
           </div>
           <div class="form-actions">
-            <button type="button" id="add-header-btn" class="secondary" onclick="App.addHeaderRow(document.getElementById('add-headers'))">+ Header</button>
+            <button type="button" class="secondary" onclick="App.addHeaderRow(document.getElementById('add-headers'))">+ Header</button>
             <button type="submit">Add Server</button>
           </div>
         </form>

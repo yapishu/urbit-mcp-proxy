@@ -20,9 +20,11 @@ window.McpProxyAPI = {
 
   getServers: function() { return this.get('/servers'); },
 
-  addServer: function(id, name, url, headers, oauthProvider) {
+  addServer: function(id, name, url, headers, opts) {
     var data = { action: 'add-server', id: id, name: name, url: url, headers: headers };
-    if (oauthProvider) data['oauth-provider'] = oauthProvider;
+    if (opts.oauthProvider) data['oauth-provider'] = opts.oauthProvider;
+    if (opts.mode) data.mode = opts.mode;
+    if (opts.schemaUrl) data['schema-url'] = opts.schemaUrl;
     return this.post(data);
   },
 
@@ -30,14 +32,20 @@ window.McpProxyAPI = {
     return this.post({ action: 'remove-server', id: id });
   },
 
-  updateServer: function(id, name, url, headers, enabled, oauthProvider) {
+  updateServer: function(id, name, url, headers, enabled, opts) {
     var data = { action: 'update-server', id: id, name: name, url: url, headers: headers, enabled: enabled };
-    if (oauthProvider) data['oauth-provider'] = oauthProvider;
+    if (opts.oauthProvider) data['oauth-provider'] = opts.oauthProvider;
+    if (opts.mode) data.mode = opts.mode;
+    if (opts.schemaUrl) data['schema-url'] = opts.schemaUrl;
     return this.post(data);
   },
 
   toggleServer: function(id) {
     return this.post({ action: 'toggle-server', id: id });
+  },
+
+  refreshSpec: function(id) {
+    return this.post({ action: 'refresh-spec', id: id });
   }
 };
 
