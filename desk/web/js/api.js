@@ -2,13 +2,13 @@ window.McpProxyAPI = {
   base: '/mcp-proxy/api',
 
   async get(path) {
-    const res = await fetch(this.base + path, { credentials: 'include' });
+    var res = await fetch(this.base + path, { credentials: 'include' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.json();
   },
 
   async post(data) {
-    const res = await fetch(this.base, {
+    var res = await fetch(this.base, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
@@ -18,25 +18,54 @@ window.McpProxyAPI = {
     return res.json();
   },
 
-  getServers() { return this.get('/servers'); },
+  getServers: function() { return this.get('/servers'); },
 
-  addServer(id, name, url, headers) {
-    return this.post({ action: 'add-server', id: id, name: name, url: url, headers: headers });
+  addServer: function(id, name, url, headers, oauthProvider) {
+    var data = { action: 'add-server', id: id, name: name, url: url, headers: headers };
+    if (oauthProvider) data['oauth-provider'] = oauthProvider;
+    return this.post(data);
   },
 
-  removeServer(id) {
+  removeServer: function(id) {
     return this.post({ action: 'remove-server', id: id });
   },
 
-  updateServer(id, name, url, headers, enabled) {
-    return this.post({ action: 'update-server', id: id, name: name, url: url, headers: headers, enabled: enabled });
+  updateServer: function(id, name, url, headers, enabled, oauthProvider) {
+    var data = { action: 'update-server', id: id, name: name, url: url, headers: headers, enabled: enabled };
+    if (oauthProvider) data['oauth-provider'] = oauthProvider;
+    return this.post(data);
   },
 
-  toggleServer(id) {
+  toggleServer: function(id) {
     return this.post({ action: 'toggle-server', id: id });
+  }
+};
+
+window.OAuthAPI = {
+  base: '/oauth/api',
+
+  async get(path) {
+    var res = await fetch(this.base + path, { credentials: 'include' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
   },
 
-  loginServer(id) {
-    return this.post({ action: 'login-server', id: id });
-  }
+  async post(data) {
+    var res = await fetch(this.base, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  },
+
+  getProviders: function() { return this.get('/providers'); },
+  getGrants: function() { return this.get('/grants'); },
+
+  addProvider: function(data) { return this.post(data); },
+  removeProvider: function(id) { return this.post({ action: 'remove-provider', id: id }); },
+  connect: function(id) { return this.post({ action: 'connect', id: id }); },
+  disconnect: function(id) { return this.post({ action: 'disconnect', id: id }); }
 };

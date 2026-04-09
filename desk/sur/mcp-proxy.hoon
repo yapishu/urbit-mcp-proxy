@@ -5,21 +5,37 @@
 ::
 +$  header  [key=@t value=@t]
 ::
-+$  mcp-server
+::  old server type (for state migration)
++$  mcp-server-0
   $:  name=@t
       url=@t
       headers=(list header)
       enabled=?
   ==
 ::
++$  mcp-server
+  $:  name=@t
+      url=@t
+      headers=(list header)
+      enabled=?
+      oauth-provider=(unit @tas)
+  ==
+::
 +$  state-0
   $:  %0
+      servers=(map server-id mcp-server-0)
+      server-order=(list server-id)
+  ==
+::
++$  state-1
+  $:  %1
       servers=(map server-id mcp-server)
       server-order=(list server-id)
   ==
 ::
 +$  versioned-state
   $%  state-0
+      state-1
   ==
 ::
 +$  action

@@ -6,6 +6,7 @@
 ::    or /mcp-proxy/mcp/{server-id} for a single server.
 ::
 /-  mcp-proxy
+/-  oauth
 /+  default-agent, dbug, server
 |%
 +$  card  card:agent:gall
@@ -20,7 +21,7 @@
 --
 ::
 %-  agent:dbug
-=|  state-0:mcp-proxy
+=|  state-1:mcp-proxy
 =*  state  -
 =/  pending  *(map @t @ta)
 =/  cookies  *(map server-id:mcp-proxy @t)
@@ -47,8 +48,17 @@
   ?:  ?=(%| -.old)
     on-init
   ?-  -.p.old
-      %0
+      %1
     :_  this(state p.old)
+    :~  [%pass /eyre/connect %arvo %e %connect [~ /mcp-proxy/api] %mcp-proxy]
+        [%pass /eyre/mcp %arvo %e %connect [~ /mcp-proxy/mcp] %mcp-proxy]
+    ==
+  ::
+      %0
+    =/  new-servers=(map server-id:mcp-proxy mcp-server:mcp-proxy)
+      %-  ~(run by servers.p.old)
+      |=(s=mcp-server-0:mcp-proxy [name.s url.s headers.s enabled.s ~])
+    :_  this(state [%1 new-servers server-order.p.old])
     :~  [%pass /eyre/connect %arvo %e %connect [~ /mcp-proxy/api] %mcp-proxy]
         [%pass /eyre/mcp %arvo %e %connect [~ /mcp-proxy/mcp] %mcp-proxy]
     ==
@@ -310,6 +320,10 @@
     =/  cookie=(unit @t)  (~(get by cookies) sid)
     =?  out-headers  ?=(^ cookie)
       (snoc out-headers ['cookie' u.cookie])
+    =/  oauth-hdr=(unit [key=@t value=@t])
+      (get-oauth-header oauth-provider.srv our.bowl now.bowl)
+    =?  out-headers  ?=(^ oauth-hdr)
+      (snoc out-headers u.oauth-hdr)
     :*  %pass  /iris/agg/[group-id]/[sid]
         %arvo  %i  %request
         [%'POST' url.srv out-headers `(as-octs:mimes:html upstream-body)]
@@ -354,6 +368,10 @@
     =/  cookie=(unit @t)  (~(get by cookies) `@tas`sid)
     =?  out-headers  ?=(^ cookie)
       (snoc out-headers ['cookie' u.cookie])
+    =/  oauth-hdr=(unit [key=@t value=@t])
+      (get-oauth-header oauth-provider.u.srv our.bowl now.bowl)
+    =?  out-headers  ?=(^ oauth-hdr)
+      (snoc out-headers u.oauth-hdr)
     =/  wire-id=@t  (scot %uv `@uv`eny.bowl)
     =.  pending  (~(put by pending) wire-id eyre-id)
     :_  this
@@ -403,6 +421,10 @@
     =/  cookie=(unit @t)  (~(get by cookies) sid)
     =?  out-headers  ?=(^ cookie)
       (snoc out-headers ['cookie' u.cookie])
+    =/  oauth-hdr=(unit [key=@t value=@t])
+      (get-oauth-header oauth-provider.u.srv our.bowl now.bowl)
+    =?  out-headers  ?=(^ oauth-hdr)
+      (snoc out-headers u.oauth-hdr)
     =/  session-id=(unit @t)
       =/  hdrs=(list [key=@t value=@t])  header-list.request.req
       |-
@@ -439,6 +461,9 @@
             ['url' s+url.srv]
             ['enabled' b+enabled.srv]
             ['authenticated' b+has-cookie]
+            :-  'oauthProvider'
+            ?~  oauth-provider.srv  ~
+            s+(scot %tas u.oauth-provider.srv)
             :-  'headers'
             :-  %a
             %+  turn  headers.srv
@@ -620,6 +645,30 @@
 |%
 ++  cors  ['access-control-allow-origin' '*']
 ::
+++  get-optional-tas
+  |=  [jon=json key=@t]
+  ^-  (unit @tas)
+  ?.  ?=(%o -.jon)  ~
+  =/  v=(unit json)  (~(get by p.jon) key)
+  ?~  v  ~
+  ?.  ?=(%s -.u.v)  ~
+  ?:  =('' p.u.v)  ~
+  ``@tas`p.u.v
+::
+++  get-oauth-header
+  |=  [oauth-prov=(unit @tas) our=@p now=@da]
+  ^-  (unit [key=@t value=@t])
+  ?~  oauth-prov  ~
+  =/  has=?
+    =/  res  (mule |.(.^(? %gx /(scot %p our)/oauth/(scot %da now)/has-grant/[u.oauth-prov]/noun)))
+    ?:(?=(%& -.res) p.res %.n)
+  ?.  has  ~
+  =/  gra=(unit grant:oauth)
+    =/  res  (mule |.(.^(grant:oauth %gx /(scot %p our)/oauth/(scot %da now)/grant/[u.oauth-prov]/noun)))
+    ?:(?=(%& -.res) `p.res ~)
+  ?~  gra  ~
+  `['authorization' (rap 3 ~[token-type.u.gra ' ' access-token.u.gra])]
+::
 ++  strip-sse
   |=  body=@t
   ^-  @t
@@ -688,7 +737,8 @@
           headers+(ar (ot ~[key+so value+so]))
       ==
     =/  [id=@t name=@t url=@t headers=(list header:mcp-proxy)]  (f jon)
-    [%add-server `@tas`id [name url headers %.y]]
+    =/  oprov=(unit @tas)  (get-optional-tas jon 'oauth-provider')
+    [%add-server `@tas`id [name url headers %.y oprov]]
       %'remove-server'
     [%remove-server `@tas`((ot ~[id+so]) jon)]
       %'update-server'
@@ -699,7 +749,8 @@
           enabled+bo
       ==
     =/  [id=@t name=@t url=@t headers=(list header:mcp-proxy) enabled=?]  (f jon)
-    [%update-server `@tas`id [name url headers enabled]]
+    =/  oprov=(unit @tas)  (get-optional-tas jon 'oauth-provider')
+    [%update-server `@tas`id [name url headers enabled oprov]]
       %'toggle-server'
     [%toggle-server `@tas`((ot ~[id+so]) jon)]
       %'login-server'

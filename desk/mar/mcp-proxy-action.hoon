@@ -23,7 +23,15 @@
         ==
       =/  [id=@t name=@t url=@t headers=(list header:mcp-proxy)]
         (f jon)
-      [%add-server `@tas`id [name url headers %.y]]
+      =/  oprov=(unit @tas)
+        =/  v=(unit ^json)
+          ?.  ?=(%o -.jon)  ~
+          (~(get by p.jon) 'oauth-provider')
+        ?~  v  ~
+        ?.  ?=(%s -.u.v)  ~
+        ?:  =('' p.u.v)  ~
+        ``@tas`p.u.v
+      [%add-server `@tas`id [name url headers %.y oprov]]
     ::
         %'remove-server'
       [%remove-server `@tas`((ot ~[id+so]) jon)]
@@ -39,10 +47,21 @@
         ==
       =/  [id=@t name=@t url=@t headers=(list header:mcp-proxy) enabled=?]
         (f jon)
-      [%update-server `@tas`id [name url headers enabled]]
+      =/  oprov=(unit @tas)
+        =/  v=(unit ^json)
+          ?.  ?=(%o -.jon)  ~
+          (~(get by p.jon) 'oauth-provider')
+        ?~  v  ~
+        ?.  ?=(%s -.u.v)  ~
+        ?:  =('' p.u.v)  ~
+        ``@tas`p.u.v
+      [%update-server `@tas`id [name url headers enabled oprov]]
     ::
         %'toggle-server'
       [%toggle-server `@tas`((ot ~[id+so]) jon)]
+    ::
+        %'login-server'
+      [%login-server `@tas`((ot ~[id+so]) jon)]
     ==
   --
 ++  grad  %noun
