@@ -125,11 +125,11 @@
       ::  POST revoke request
       ::
       =/  body=@t
-        ;:  cat  3
-          'token='
-          access-token.u.gra
-          '&client_id='
-          client-id.u.cfg
+        %+  rap  3
+        :~  'token='
+            access-token.u.gra
+            '&client_id='
+            client-id.u.cfg
         ==
       :_  this
       :~  :*  %pass  /iris/revoke/[id.act]
@@ -162,7 +162,7 @@
         :_  this
         %+  give-simple-payload:app:server  eyre-id
         (login-redirect:gen:server request.req)
-      (handle-api eyre-id req (slag 2 site))
+      (handle-api eyre-id req t.t.site)
     ::  /oauth or /oauth/ — serve web UI
     ::
     ?:  ?|  ?=([%oauth ~] site)
@@ -176,15 +176,15 @@
       (give-http eyre-id 200 ~[['content-type' 'text/html']] (some (as-octs:mimes:html index-html)))
     ::  /oauth/css/app.css
     ::
-    ?:  ?=([%oauth %css %app.css ~] site)
+    ?:  ?=([%oauth %css %app ~] site)
       :_  this
       (give-http eyre-id 200 ~[['content-type' 'text/css']] (some (as-octs:mimes:html app-css)))
     ::  /oauth/js/*
     ::
-    ?:  ?=([%oauth %js %app.js ~] site)
+    ?:  ?=([%oauth %js %app ~] site)
       :_  this
       (give-http eyre-id 200 ~[['content-type' 'application/javascript']] (some (as-octs:mimes:html app-js)))
-    ?:  ?=([%oauth %js %api.js ~] site)
+    ?:  ?=([%oauth %js %api ~] site)
       :_  this
       (give-http eyre-id 200 ~[['content-type' 'application/javascript']] (some (as-octs:mimes:html api-js)))
     ::  404
@@ -225,13 +225,18 @@
     ::  build token exchange request
     ::
     =/  body=@t
-      ;:  cat  3
-        'grant_type=authorization_code'
-        '&code='       u.code
-        '&redirect_uri='  redirect-uri.u.cfg
-        '&client_id='     client-id.u.cfg
-        '&client_secret=' client-secret.u.cfg
-        '&code_verifier=' verifier.u.pend
+      %+  rap  3
+      :~  'grant_type=authorization_code'
+          '&code='
+          u.code
+          '&redirect_uri='
+          redirect-uri.u.cfg
+          '&client_id='
+          client-id.u.cfg
+          '&client_secret='
+          client-secret.u.cfg
+          '&code_verifier='
+          verifier.u.pend
       ==
     ::  send token exchange via iris, serve wait page
     ::
@@ -311,9 +316,12 @@
 ++  on-watch
   |=  =path
   ^-  (quip card _this)
-  ?>  =(our.bowl src.bowl)
   ?+  path  (on-watch:def path)
+      [%http-response @ ~]
+    `this
+  ::
       [%grants ~]
+    ?>  =(our.bowl src.bowl)
     ::  send initial grant state
     ::
     :_  this
@@ -369,7 +377,7 @@
     ?~  pend
       ~&  [%oauth %token-exchange-failed st %no-pending]
       `this
-    =/  gra=(unit grant:oauth)  (parse-token-response u.jon provider-id.u.pend)
+    =/  gra=(unit grant:oauth)  (parse-token-response u.jon provider-id.u.pend now.bowl)
     ?~  gra
       ~&  [%oauth %token-exchange-failed st %parse-failed]
       =.  pending  (~(del by pending) st)
@@ -419,7 +427,7 @@
     ?~  jon
       ~&  [%oauth %refresh-failed pid %bad-json]
       `this
-    =/  gra=(unit grant:oauth)  (parse-token-response u.jon pid)
+    =/  gra=(unit grant:oauth)  (parse-token-response u.jon pid now.bowl)
     ?~  gra
       ~&  [%oauth %refresh-failed pid %parse-failed]
       :_  this
@@ -476,11 +484,14 @@
     ::  POST refresh request
     ::
     =/  body=@t
-      ;:  cat  3
-        'grant_type=refresh_token'
-        '&refresh_token='  u.refresh-token.u.gra
-        '&client_id='      client-id.u.cfg
-        '&client_secret='  client-secret.u.cfg
+      %+  rap  3
+      :~  'grant_type=refresh_token'
+          '&refresh_token='
+          u.refresh-token.u.gra
+          '&client_id='
+          client-id.u.cfg
+          '&client_secret='
+          client-secret.u.cfg
       ==
     :_  this
     :~  :*  %pass  /iris/token-refresh/[pid]
@@ -573,15 +584,20 @@
 ++  build-auth-url
   |=  [cfg=provider-config:oauth state=@t challenge=@t]
   ^-  @t
-  ;:  cat  3
-    auth-url.cfg
-    '?client_id='      client-id.cfg
-    '&redirect_uri='   redirect-uri.cfg
-    '&response_type=code'
-    '&state='          state
-    '&code_challenge=' challenge
-    '&code_challenge_method=S256'
-    '&scope='          scopes.cfg
+  %+  rap  3
+  :~  auth-url.cfg
+      '?client_id='
+      client-id.cfg
+      '&redirect_uri='
+      redirect-uri.cfg
+      '&response_type=code'
+      '&state='
+      state
+      '&code_challenge='
+      challenge
+      '&code_challenge_method=S256'
+      '&scope='
+      scopes.cfg
   ==
 ::
 ::  query param extractor
@@ -597,14 +613,14 @@
 ::  token response parser
 ::
 ++  parse-token-response
-  |=  [jon=json pid=provider-id:oauth]
+  |=  [jon=json pid=provider-id:oauth now=@da]
   ^-  (unit grant:oauth)
-  =/  res  (mule |.((parse-token-json jon pid)))
+  =/  res  (mule |.((parse-token-json jon pid now)))
   ?:  ?=(%& -.res)  `p.res
   ~
 ::
 ++  parse-token-json
-  |=  [jon=json pid=provider-id:oauth]
+  |=  [jon=json pid=provider-id:oauth now=@da]
   ^-  grant:oauth
   ?>  ?=(%o -.jon)
   =/  at=@t
@@ -628,7 +644,7 @@
     ?.  ?=(%n -.u.v)  ~
     =/  secs=(unit @ud)  (slaw %ud p.u.v)
     ?~  secs  ~
-    `(add now.bowl (mul u.secs ~s1))
+    `(add now (mul u.secs ~s1))
   =/  sc=@t
     =/  v=(unit json)  (~(get by p.jon) 'scope')
     ?~  v  ''
@@ -663,15 +679,7 @@
           redirect-uri+so
           scopes+so
       ==
-    =/  $:  id=@t
-            auth-url=@t
-            token-url=@t
-            revoke-url=(unit @t)
-            client-id=@t
-            client-secret=@t
-            redirect-uri=@t
-            scopes=@t
-        ==
+    =/  [id=@t auth-url=@t token-url=@t revoke-url=(unit @t) client-id=@t client-secret=@t redirect-uri=@t scopes=@t]
       (f jon)
     [%add-provider `@tas`id [auth-url token-url revoke-url client-id client-secret redirect-uri scopes]]
   ::
