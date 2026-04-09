@@ -24,6 +24,7 @@
 =|  state-2:mcp-proxy
 =*  state  -
 =/  pending  *(map @t @ta)
+=/  wrap-set  *(map @t json)                      ::  wire-id -> client's JSON-RPC id (for MCP wrapping)
 =/  cookies  *(map server-id:mcp-proxy @t)
 =/  agg-pending  *(map @t agg-request)
 =/  spec-cache  *(map server-id:mcp-proxy json)
@@ -264,6 +265,10 @@
           ['access-control-max-age' '86400']
       ==
       ~
+    ::  non-POST: return 200 empty (GET SSE not supported)
+    ?.  =(%'POST' method.request.req)
+      :_  this
+      (give-http eyre-id 200 ~[cors] ~)
     =/  body=@t
       ?~  body.request.req  ''
       `@t`q.u.body.request.req
@@ -310,6 +315,7 @@
       (fan-out eyre-id req-id method)
     ::
         ?(%'tools/call' %'resources/read' %'prompts/get')
+      ~&  [%mcp-proxy %routing-call method (get-json-string (get-json-field u.jon 'params') 'name')]
       (route-call eyre-id req u.jon method)
     ==
   ::
@@ -472,12 +478,10 @@
         =/  a=(unit json)  ?.(?=(%o -.params) ~ (~(get by p.params) 'arguments'))
         (fall a params)
       ::  build API URL with path params and query string
-      =/  op-params=(list json)
-        =/  v=(unit json)  ?.(?=(%o -.operation.u.op) ~ (~(get by p.operation.u.op) 'parameters'))
-        ?~  v  ~  ?.(?=(%a -.u.v) ~ p.u.v)
+      =/  path-params=(set @t)  (extract-path-params path.u.op)
       =/  api-url=@t
         =/  base-with-path=@t  (build-api-url url.u.srv path.u.op args)
-        =/  qs=@t  (build-query-string op-params args)
+        =/  qs=@t  (build-all-args-query args path-params)
         (cat 3 base-with-path qs)
       ::  build body for POST/PUT/PATCH
       =/  req-method=method:http
@@ -495,11 +499,14 @@
         `(as-octs:mimes:html (en:json:html args))
       =?  out-headers  has-body
         [['content-type' 'application/json'] out-headers]
+      ::  store eyre-id and use behn to respond from on-arvo
       =/  wire-id=@t  (scot %uv `@uv`eny.bowl)
+      =/  client-rpc-id=json  (get-json-field jon 'id')
       =.  pending  (~(put by pending) wire-id eyre-id)
+      =.  wrap-set  (~(put by wrap-set) wire-id client-rpc-id)
       =/  =request:http  [req-method api-url out-headers body]
       :_  this
-      :~  [%pass /iris/apicall/[wire-id] %arvo %i %request request *outbound-config:iris]
+      :~  [%pass /iris/proxy/[wire-id] %arvo %i %request request *outbound-config:iris]
       ==
     ::  proxy mode: forward as MCP request
     =/  new-params=json
@@ -687,59 +694,6 @@
     ~&  [%mcp-proxy %login-ok sid]
     `this(cookies (~(put by cookies) sid u.cookie))
   ::
-      [%iris %apicall @ ~]
-    ::  OpenAPI REST call response: wrap in MCP tools/call result
-    ::
-    =/  wire-id=@t  i.t.t.wire
-    =/  eid=(unit @ta)  (~(get by pending) wire-id)
-    ?~  eid
-      ~&  [%mcp-proxy %no-pending-apicall wire-id]
-      `this
-    =.  pending  (~(del by pending) wire-id)
-    ?.  ?=([%iris %http-response *] sign)
-      :_  this
-      %-  give-http  :^  u.eid  502
-      ~[cors ['content-type' 'application/json']]
-      (some (as-octs:mimes:html '{"error":"api call failed"}'))
-    =/  resp=client-response:iris  client-response.sign
-    ?.  ?=(%finished -.resp)
-      :_  this
-      %-  give-http  :^  u.eid  502
-      ~[cors ['content-type' 'application/json']]
-      (some (as-octs:mimes:html '{"error":"api call in progress"}'))
-    =/  body-text=@t
-      ?~  full-file.resp  ''
-      `@t`q.data.u.full-file.resp
-    ::  wrap in MCP JSON-RPC response format
-    =/  is-error=?  (gte status-code.response-header.resp 400)
-    =/  mcp-resp=json
-      %-  pairs:enjs:format
-      :~  ['jsonrpc' s+'2.0']
-          ['id' (numb:enjs:format 1)]
-          :-  'result'
-          %-  pairs:enjs:format
-          :~  :-  'content'
-              :-  %a
-              :~  %-  pairs:enjs:format
-                  :~  ['type' s+'text']
-                      ['text' s+body-text]
-                  ==
-              ==
-              ['isError' b+is-error]
-          ==
-      ==
-    =/  resp-body=@t  (en:json:html mcp-resp)
-    :_  this
-    =/  resp-headers=(list [key=@t value=@t])
-      :~  cors
-          ['content-type' 'application/json']
-          ['access-control-expose-headers' 'Mcp-Session-Id']
-      ==
-    =/  =path  /http-response/[u.eid]
-    :~  [%give %fact ~[path] %http-response-header !>(`response-header:http`[200 resp-headers])]
-        [%give %fact ~[path] %http-response-data !>(`(unit octs)`(some (as-octs:mimes:html resp-body)))]
-        [%give %kick ~[path] ~]
-    ==
   ::
       [%iris %proxy @ ~]
     =/  wire-id=@t  i.t.t.wire
@@ -748,6 +702,9 @@
       ~&  [%mcp-proxy %no-pending wire-id]
       `this
     =.  pending  (~(del by pending) wire-id)
+    =/  client-id=(unit json)  (~(get by wrap-set) wire-id)
+    =/  needs-wrap=?  ?=(^ client-id)
+    =?  wrap-set  needs-wrap  (~(del by wrap-set) wire-id)
     ?.  ?=([%iris %http-response *] sign)
       :_  this
       %-  give-http  :^  u.eid  502
@@ -759,6 +716,36 @@
       %-  give-http  :^  u.eid  502
       ~[cors ['content-type' 'application/json']]
       (some (as-octs:mimes:html '{"error":"upstream in progress"}'))
+    ::  for openapi calls, wrap the REST response in MCP format
+    ?:  needs-wrap
+      =/  body-text=@t
+        ?~  full-file.resp  ''
+        `@t`q.data.u.full-file.resp
+      =/  is-error=?  (gte status-code.response-header.resp 400)
+      =/  mcp-resp=@t
+        %-  en:json:html
+        %-  pairs:enjs:format
+        :~  ['jsonrpc' s+'2.0']
+            ['id' (fall client-id (numb:enjs:format 1))]
+            :-  'result'
+            %-  pairs:enjs:format
+            :~  :-  'content'
+                :-  %a
+                :~  (pairs:enjs:format ~[['type' s+'text'] ['text' s+body-text]])
+                ==
+                ['isError' b+is-error]
+            ==
+        ==
+      =/  resp-headers=(list [key=@t value=@t])
+        ~[cors ['content-type' 'application/json'] ['cache-control' 'no-cache'] ['access-control-expose-headers' 'Mcp-Session-Id'] ['content-encoding' 'identity']]
+      =/  bod=(unit octs)  `(as-octs:mimes:html mcp-resp)
+      :_  this
+      =/  =path  /http-response/[u.eid]
+      :~  [%give %fact ~[path] %http-response-header !>(`response-header:http`[200 resp-headers])]
+          [%give %fact ~[path] %http-response-data !>(bod)]
+          [%give %kick ~[path] ~]
+      ==
+    ::  for proxy calls, forward upstream response as-is
     =/  resp-headers=(list [key=@t value=@t])
       %+  weld  ~[cors ['access-control-expose-headers' 'Mcp-Session-Id']]
       %+  skip  headers.response-header.resp
@@ -1003,6 +990,45 @@
   ?~  rest  (cat 3 '?' result)
   $(result (cat 3 result (cat 3 '&' i.rest)), rest t.rest)
 ::
+++  extract-path-params
+  |=  path-template=@t
+  ^-  (set @t)
+  =/  t=tape  (trip path-template)
+  =/  result=(set @t)  ~
+  |-
+  ?~  t  result
+  ?.  =(i.t '{')  $(t t.t)
+  =/  rest=tape  t.t
+  =/  close=(unit @ud)  (find "}" rest)
+  ?~  close  result
+  =/  param=@t  (crip (scag u.close rest))
+  $(t (slag +(u.close) rest), result (~(put in result) param))
+::
+++  build-all-args-query
+  |=  [args=json exclude=(set @t)]
+  ^-  @t
+  ?.  ?=(%o -.args)  ''
+  =/  items=(list [@t json])  ~(tap by p.args)
+  =/  parts=(list @t)
+    %+  murn  items
+    |=  [key=@t val=json]
+    ^-  (unit @t)
+    ?:  (~(has in exclude) key)  ~
+    =/  v=@t
+      ?+  -.val  ''
+        %s  p.val
+        %n  p.val
+        %b  ?:(p.val 'true' 'false')
+      ==
+    ?:  =('' v)  ~
+    `(cat 3 key (cat 3 '=' v))
+  ?~  parts  ''
+  =/  result=@t  i.parts
+  =/  rest=(list @t)  t.parts
+  |-
+  ?~  rest  (cat 3 '?' result)
+  $(result (cat 3 result (cat 3 '&' i.rest)), rest t.rest)
+::
 ++  get-optional-string
   |=  [jon=json key=@t]
   ^-  (unit @t)
@@ -1076,8 +1102,10 @@
   ^-  @t
   =/  v=json  (get-json-field jon key)
   ?~  v  ''
-  ?.  ?=(%s -.v)  ''
-  p.v
+  ?:  ?=(%s -.v)  p.v
+  ?:  ?=(%n -.v)  p.v
+  ?:  ?=(%b -.v)  ?:(p.v 'true' 'false')
+  ''
 ::
 ++  split-on-underscore
   |=  name=@t
