@@ -158,6 +158,9 @@
     (rush url.request ;~(plug apat:de-purl:html yque:de-purl:html))
   ?.  =(web-root (scag (lent web-root) site))
     [%| [500 ~] `(as-octs:mimes:html 'bad route')]
+  ::  redirect /apps/mcp-proxy to /apps/mcp-proxy/
+  ?:  &(=(web-root site) ?=(~ ext))
+    [%| [301 ['location' (cat 3 (spat web-root) '/')]~] ~]
   =.  site  (slag (lent web-root) site)
   :-  :-  %&
       |-
@@ -191,7 +194,7 @@
         .^(=tube:clay %cc (weld bas /[ext.target]/mime))
     =+  !<(=mime (tube file))
     :_  `q.mime
-    [200 ['content-type' (rsh 3^1 (spat p.mime))]~]
+    [200 ['content-type' (rsh 3^1 (spat p.mime))] ['cache-control' 'no-cache'] ~]
   ?>  ?=(%apache target)
   [[200 ['content-type' 'text/html;charset=UTF-8']~] `(as-octs:mimes:html 'directory listing not supported')]
 ::

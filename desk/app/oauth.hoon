@@ -13,6 +13,7 @@
 %-  agent:dbug
 =|  state-0:oauth
 =*  state  -
+=/  refreshing  *(set provider-id:oauth)  ::  in-flight refresh locks (non-persisted)
 ^-  agent:gall
 =<
 |_  =bowl:gall
@@ -35,9 +36,23 @@
     on-init
   ?-  -.p.old
       %0
+    ::  re-register refresh timers for all grants with expiry
+    =/  eyre-cards=(list card)
+      :~  [%pass /eyre/connect %arvo %e %connect [~ /oauth] %oauth]
+      ==
+    =/  timer-cards=(list card)
+      %+  murn  ~(tap by grants.p.old)
+      |=  [pid=provider-id:oauth gra=grant:oauth]
+      ?~  expires-at.gra  ~
+      ?~  refresh-token.gra  ~
+      =/  refresh-time=@da
+        =/  margin=@dr  ~m5
+        ?:  (gth u.expires-at.gra (add now.bowl margin))
+          (sub u.expires-at.gra margin)
+        (add now.bowl ~s5)
+      `[%pass /timer/refresh/[pid] %arvo %b %wait refresh-time]
     :_  this(state p.old)
-    :~  [%pass /eyre/connect %arvo %e %connect [~ /oauth] %oauth]
-    ==
+    (weld eyre-cards timer-cards)
   ==
 ::
 ++  on-poke
@@ -108,6 +123,38 @@
       :~  [%give %fact [/grants]~ %oauth-update !>(`update:oauth`[%grant-removed id.act])]
       ==
     ::
+        %force-refresh
+      ::  trigger immediate token refresh (called by %mcp-proxy on 401)
+      =/  gra=(unit grant:oauth)  (~(get by grants) id.act)
+      ?~  gra  `this
+      ?~  refresh-token.u.gra  `this
+      ?:  (~(has in refreshing) id.act)  `this
+      =/  cfg=(unit provider-config:oauth)  (~(get by providers) id.act)
+      ?~  cfg  `this
+      =.  refreshing  (~(put in refreshing) id.act)
+      =/  body=@t
+        %+  rap  3
+        :~  'grant_type=refresh_token'
+            '&refresh_token='
+            u.refresh-token.u.gra
+        ==
+      =/  basic-auth=@t  (make-basic-auth client-id.u.cfg client-secret.u.cfg)
+      ~&  [%oauth %force-refresh id.act]
+      :_  this
+      :~  :*  %pass  /iris/token-refresh/[id.act]
+              %arvo  %i  %request
+              :*  %'POST'
+                  token-url.u.cfg
+                  :~  ['content-type' 'application/x-www-form-urlencoded']
+                      ['accept' 'application/json']
+                      ['authorization' basic-auth]
+                  ==
+                  `(as-octs:mimes:html body)
+              ==
+              *outbound-config:iris
+          ==
+      ==
+    ::
         %revoke
       =/  gra=(unit grant:oauth)  (~(get by grants) id.act)
       ?~  gra
@@ -163,11 +210,15 @@
         %+  give-simple-payload:app:server  eyre-id
         (login-redirect:gen:server request.req)
       (handle-api eyre-id req t.t.site)
-    ::  /oauth or /oauth/ — serve web UI
+    ::  /oauth or /oauth/ — redirect to main MCP proxy UI
     ::
     ?:  ?|  ?=([%oauth ~] site)
             ?=([%oauth %$ ~] site)
         ==
+      :_  this
+      (give-http eyre-id 307 ~[['location' '/apps/mcp-proxy/']] ~)
+    ::  /oauth/manage — old direct UI (kept for backward compat)
+    ?:  ?=([%oauth %manage ~] site)
       ?.  authenticated.req
         :_  this
         %+  give-simple-payload:app:server  eyre-id
@@ -403,6 +454,7 @@
   ::
       [%iris %token-refresh @ ~]
     =/  pid=provider-id:oauth  i.t.t.wire
+    =.  refreshing  (~(del in refreshing) pid)
     ?.  ?=([%iris %http-response *] sign)
       ~&  [%oauth %refresh-failed pid %bad-sign]
       `this
@@ -411,9 +463,15 @@
       ~&  [%oauth %refresh-failed pid %not-finished]
       `this
     ?.  =(200 status-code.response-header.resp)
-      ~&  [%oauth %refresh-failed pid %status status-code.response-header.resp]
-      ::  refresh failed — notify token expired
-      ::
+      ::  check for invalid_grant (requires re-auth, not retry)
+      =/  err-body=@t
+        ?~  full-file.resp  ''
+        `@t`q.data.u.full-file.resp
+      =/  is-invalid=?
+        !=(~ (find "invalid_grant" (trip err-body)))
+      ~&  [%oauth %refresh-failed pid %status status-code.response-header.resp ?:(is-invalid %invalid-grant %other)]
+      ::  remove grant if invalid_grant (forces re-auth)
+      =?  grants  is-invalid  (~(del by grants) pid)
       :_  this
       :~  [%give %fact [/grants]~ %oauth-update !>(`update:oauth`[%token-expired pid])]
       ==
@@ -466,11 +524,11 @@
       [%timer %refresh @ ~]
     =/  pid=provider-id:oauth  i.t.t.wire
     ?.  ?=([%behn %wake *] sign)  `this
+    ::  single-flight: skip if already refreshing
+    ?:  (~(has in refreshing) pid)  `this
     =/  gra=(unit grant:oauth)  (~(get by grants) pid)
     ?~  gra  `this
     ?~  refresh-token.u.gra
-      ::  no refresh token — just notify expired
-      ::
       :_  this
       :~  [%give %fact [/grants]~ %oauth-update !>(`update:oauth`[%token-expired pid])]
       ==
@@ -479,8 +537,7 @@
       :_  this
       :~  [%give %fact [/grants]~ %oauth-update !>(`update:oauth`[%token-expired pid])]
       ==
-    ::  POST refresh request
-    ::
+    =.  refreshing  (~(put in refreshing) pid)
     =/  body=@t
       %+  rap  3
       :~  'grant_type=refresh_token'
@@ -523,6 +580,34 @@
       [%x %has-grant @ ~]
     =/  pid=provider-id:oauth  `@tas`i.t.t.path
     ``noun+!>((~(has by grants) pid))
+  ::
+      ::  /x/token/<provider-id>: get access token as @t
+      ::  returns the token if valid, or '' if expired/missing
+      ::  callers should poke %oauth with %connect if '' is returned
+      ::
+      [%x %token @ ~]
+    =/  pid=provider-id:oauth  `@tas`i.t.t.path
+    =/  gra=(unit grant:oauth)  (~(get by grants) pid)
+    ?~  gra  ``noun+!>(`@t`'')
+    ::  check if expired
+    ?:  ?&  ?=(^ expires-at.u.gra)
+            (lth u.expires-at.u.gra now.bowl)
+        ==
+      ``noun+!>(`@t`'')
+    ``noun+!>(access-token.u.gra)
+  ::
+      ::  /x/auth-header/<provider-id>: get full Authorization header
+      ::  e.g. "Bearer xxx" - ready to use as header value
+      ::
+      [%x %auth-header @ ~]
+    =/  pid=provider-id:oauth  `@tas`i.t.t.path
+    =/  gra=(unit grant:oauth)  (~(get by grants) pid)
+    ?~  gra  ``noun+!>(`@t`'')
+    ?:  ?&  ?=(^ expires-at.u.gra)
+            (lth u.expires-at.u.gra now.bowl)
+        ==
+      ``noun+!>(`@t`'')
+    ``noun+!>((rap 3 ~[token-type.u.gra ' ' access-token.u.gra]))
   ==
 ::
 ++  on-fail  on-fail:def
@@ -697,6 +782,9 @@
   ::
       %'revoke'
     [%revoke `@tas`((ot ~[id+so]) jon)]
+  ::
+      %'force-refresh'
+    [%force-refresh `@tas`((ot ~[id+so]) jon)]
   ==
 ::
 ::  JSON builders

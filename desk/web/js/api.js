@@ -46,6 +46,18 @@ window.McpProxyAPI = {
 
   refreshSpec: function(id) {
     return this.post({ action: 'refresh-spec', id: id });
+  },
+
+  getTools: function(id) {
+    return this.get('/tools/' + id);
+  },
+
+  setToolFilter: function(id, mode, tools) {
+    return this.post({ action: 'set-tool-filter', id: id, mode: mode, tools: tools });
+  },
+
+  clearToolFilter: function(id) {
+    return this.post({ action: 'clear-tool-filter', id: id });
   }
 };
 

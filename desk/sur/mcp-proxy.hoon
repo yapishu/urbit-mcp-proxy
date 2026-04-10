@@ -7,6 +7,11 @@
 ::
 +$  server-mode  ?(%proxy %openapi)
 ::
++$  tool-filter
+  $:  mode=?(%allow %block)
+      tools=(set @t)
+  ==
+::
 ::  old types for state migration
 +$  mcp-server-0
   $:  name=@t
@@ -25,12 +30,12 @@
 ::
 +$  mcp-server
   $:  name=@t
-      url=@t                        ::  MCP endpoint (proxy) or API base URL (openapi)
+      url=@t
       headers=(list header)
       enabled=?
       oauth-provider=(unit @tas)
       mode=server-mode
-      schema-url=(unit @t)          ::  OpenAPI spec URL (openapi mode only)
+      schema-url=(unit @t)
   ==
 ::
 +$  state-0
@@ -51,10 +56,18 @@
       server-order=(list server-id)
   ==
 ::
++$  state-3
+  $:  %3
+      servers=(map server-id mcp-server)
+      server-order=(list server-id)
+      tool-filters=(map server-id tool-filter)
+  ==
+::
 +$  versioned-state
   $%  state-0
       state-1
       state-2
+      state-3
   ==
 ::
 +$  action
@@ -64,6 +77,8 @@
       [%toggle-server id=server-id]
       [%login-server id=server-id]
       [%refresh-spec id=server-id]
+      [%set-tool-filter id=server-id =tool-filter]
+      [%clear-tool-filter id=server-id]
   ==
 ::
 +$  update

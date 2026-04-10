@@ -21,7 +21,7 @@
 --
 ::
 %-  agent:dbug
-=|  state-2:mcp-proxy
+=|  state-3:mcp-proxy
 =*  state  -
 =/  pending  *(map @t @ta)
 =/  wrap-set  *(map @t json)                      ::  wire-id -> client's JSON-RPC id (for MCP wrapping)
@@ -54,35 +54,49 @@
         [%pass /eyre/mcp %arvo %e %connect [~ /mcp-proxy/mcp] %mcp-proxy]
     ==
   ?-  -.p.old
-      %2
+      %3
     ::  re-fetch specs for openapi servers (cache is non-persisted)
     =/  spec-cards=(list card)
       %+  murn  ~(tap by servers.p.old)
       |=  [sid=server-id:mcp-proxy srv=mcp-server:mcp-proxy]
       ?.  =(%openapi mode.srv)  ~
       ?~  schema-url.srv  ~
-      ~&  [%mcp-proxy %refetching-spec sid]
       %-  some
       :*  %pass  /iris/spec/[sid]
           %arvo  %i  %request
           [%'GET' u.schema-url.srv ~[['accept' 'application/json']] ~]
           *outbound-config:iris
       ==
+    ::  clear eyre cache for web UI files on every bump
+    =/  cache-cards=(list card)
+      %+  turn
+        :~  '/apps/mcp-proxy'
+            '/apps/mcp-proxy/'
+            '/apps/mcp-proxy/index.html'
+            '/apps/mcp-proxy/css/app.css'
+            '/apps/mcp-proxy/js/app.js'
+            '/apps/mcp-proxy/js/api.js'
+        ==
+      |=(url=@t [%pass /eyre/cache %arvo %e %set-response url ~])
     :_  this(state p.old)
-    (weld eyre-cards spec-cards)
+    :(weld eyre-cards spec-cards cache-cards)
+  ::
+      %2
+    :_  this(state [%3 servers.p.old server-order.p.old ~])
+    eyre-cards
   ::
       %1
     =/  new-servers=(map server-id:mcp-proxy mcp-server:mcp-proxy)
       %-  ~(run by servers.p.old)
       |=(s=mcp-server-1:mcp-proxy [name.s url.s headers.s enabled.s oauth-provider.s %proxy ~])
-    :_  this(state [%2 new-servers server-order.p.old])
+    :_  this(state [%3 new-servers server-order.p.old ~])
     eyre-cards
   ::
       %0
     =/  new-servers=(map server-id:mcp-proxy mcp-server:mcp-proxy)
       %-  ~(run by servers.p.old)
       |=(s=mcp-server-0:mcp-proxy [name.s url.s headers.s enabled.s ~ %proxy ~])
-    :_  this(state [%2 new-servers server-order.p.old])
+    :_  this(state [%3 new-servers server-order.p.old ~])
     eyre-cards
   ==
 ::
@@ -150,6 +164,14 @@
       ?.  =(%openapi mode.u.srv)  `this
       ?~  schema-url.u.srv  `this
       (fetch-spec id.act u.schema-url.u.srv)
+    ::
+        %set-tool-filter
+      =.  tool-filters  (~(put by tool-filters) id.act tool-filter.act)
+      `this
+    ::
+        %clear-tool-filter
+      =.  tool-filters  (~(del by tool-filters) id.act)
+      `this
     ::
         %login-server
       =/  srv=(unit mcp-server:mcp-proxy)  (~(get by servers) id.act)
@@ -228,6 +250,46 @@
         [%servers ~]
       :_  this
       (give-json eyre-id (build-servers-json ~))
+    ::
+        [%tools @ ~]
+      ::  list tools for a specific server
+      =/  sid=server-id:mcp-proxy  `@tas`i.t.site
+      =/  srv=(unit mcp-server:mcp-proxy)  (~(get by servers) sid)
+      ?~  srv
+        :_  this
+        (give-json eyre-id (pairs:enjs:format ~[['tools' a+~]]))
+      ?:  =(%openapi mode.u.srv)
+        ::  openapi: generate from cached spec
+        =/  spec=(unit json)  (~(get by spec-cache) sid)
+        ?~  spec
+          :_  this
+          (give-json eyre-id (pairs:enjs:format ~[['tools' a+~]]))
+        =/  tools=(list json)  (apply-tool-filter sid (spec-to-tools sid u.spec) tool-filters)
+        :_  this
+        (give-json eyre-id (pairs:enjs:format ~[['tools' a+tools]]))
+      ::  proxy: fetch tools/list from upstream via iris
+      =/  upstream-body=@t
+        %-  en:json:html
+        %-  pairs:enjs:format
+        :~  ['jsonrpc' s+'2.0']  ['method' s+'tools/list']
+            ['id' (numb:enjs:format 1)]  ['params' (pairs:enjs:format ~)]
+        ==
+      =/  out-headers=(list [key=@t value=@t])
+        %+  weld
+          ~[['content-type' 'application/json'] ['accept' 'application/json']]
+        headers.u.srv
+      =/  cookie=(unit @t)  (~(get by cookies) sid)
+      =?  out-headers  ?=(^ cookie)
+        (snoc out-headers ['cookie' u.cookie])
+      =/  oauth-hdr=(unit [key=@t value=@t])
+        (get-oauth-header oauth-provider.u.srv our.bowl now.bowl)
+      =?  out-headers  ?=(^ oauth-hdr)
+        (snoc out-headers u.oauth-hdr)
+      =/  wire-id=@t  (scot %uv `@uv`eny.bowl)
+      =.  pending  (~(put by pending) wire-id eyre-id)
+      :_  this
+      :~  [%pass /iris/toolsapi/[wire-id] %arvo %i %request [%'POST' url.u.srv out-headers `(as-octs:mimes:html upstream-body)] *outbound-config:iris]
+      ==
     ==
   ::
   ++  handle-post
@@ -360,7 +422,7 @@
       ?.  =(%'tools/list' method)
         ::  openapi only supports tools for now
         [sid `(pairs:enjs:format ~[['jsonrpc' s+'2.0'] ['id' (numb:enjs:format 1)] ['result' (pairs:enjs:format ~[[result-key a+~]])]])]
-      =/  tools=(list json)  (spec-to-tools sid u.spec)
+      =/  tools=(list json)  (apply-tool-filter sid (spec-to-tools sid u.spec) tool-filters)
       [sid `(pairs:enjs:format ~[['jsonrpc' s+'2.0'] ['id' (numb:enjs:format 1)] ['result' (pairs:enjs:format ~[['tools' a+tools]])]])]
     =/  total=@ud  (lent enabled)
     ::  if no proxy servers, respond immediately with local results
@@ -480,7 +542,11 @@
       ::  build API URL with path params and query string
       =/  path-params=(set @t)  (extract-path-params path.u.op)
       =/  api-url=@t
-        =/  base-with-path=@t  (build-api-url url.u.srv path.u.op args)
+        ::  use server URL if set, otherwise derive from spec
+        =/  base-url=@t
+          ?:  !=('' url.u.srv)  url.u.srv
+          (get-spec-base-url u.spec)
+        =/  base-with-path=@t  (build-api-url base-url path.u.op args)
         =/  qs=@t  (build-all-args-query args path-params)
         (cat 3 base-with-path qs)
       ::  build body for POST/PUT/PATCH
@@ -614,6 +680,13 @@
             ?~  oauth-provider.srv  ~
             s+(scot %tas u.oauth-provider.srv)
             ['hasCachedSpec' b+(~(has by spec-cache) sid)]
+            :-  'toolFilter'
+            =/  filt=(unit tool-filter:mcp-proxy)  (~(get by tool-filters) sid)
+            ?~  filt  ~
+            %-  pairs:enjs:format
+            :~  ['mode' s+?:(?=(%allow mode.u.filt) 'allow' 'block')]
+                ['tools' a+(turn ~(tap in tools.u.filt) |=(t=@t s+t))]
+            ==
             :-  'headers'
             :-  %a
             %+  turn  headers.srv
@@ -665,6 +738,36 @@
       `this
     ~&  [%mcp-proxy %spec-cached sid]
     `this(spec-cache (~(put by spec-cache) sid u.jon))
+  ::
+      [%iris %toolsapi @ ~]
+    ::  tools API response: parse MCP response and extract tools list
+    =/  wire-id=@t  i.t.t.wire
+    =/  eid=(unit @ta)  (~(get by pending) wire-id)
+    ?~  eid  `this
+    =.  pending  (~(del by pending) wire-id)
+    ?.  ?=([%iris %http-response *] sign)
+      :_  this
+      (give-http u.eid 502 ~[cors ['content-type' 'application/json']] (some (as-octs:mimes:html '{"tools":[]}')))
+    =/  resp=client-response:iris  client-response.sign
+    ?.  ?=(%finished -.resp)
+      :_  this
+      (give-http u.eid 200 ~[cors ['content-type' 'application/json']] (some (as-octs:mimes:html '{"tools":[]}')))
+    =/  body=@t
+      ?~  full-file.resp  ''
+      `@t`q.data.u.full-file.resp
+    ::  strip SSE prefix if present
+    =/  clean=@t  (strip-sse body)
+    =/  jon=(unit json)  (de:json:html clean)
+    =/  tools=(list json)
+      ?~  jon  ~
+      ::  MCP response: {"result":{"tools":[...]}}
+      =/  result=json  (get-json-field u.jon 'result')
+      =/  tl=json  (get-json-field result 'tools')
+      ?.  ?=(%a -.tl)  ~
+      p.tl
+    =/  resp-body=@t  (en:json:html (pairs:enjs:format ~[['tools' a+tools]]))
+    :_  this
+    (give-http u.eid 200 ~[cors ['content-type' 'application/json']] (some (as-octs:mimes:html resp-body)))
   ::
       [%iris %login @ ~]
     =/  sid=server-id:mcp-proxy  i.t.t.wire
@@ -722,6 +825,20 @@
         ?~  full-file.resp  ''
         `@t`q.data.u.full-file.resp
       =/  is-error=?  (gte status-code.response-header.resp 400)
+      ::  on 401, trigger a token refresh for next call
+      ::  on 401, trigger force-refresh for the oauth provider (fire-and-forget)
+      ::  next call will use the refreshed token
+      =/  refresh-cards=(list card)
+        ?.  =(401 status-code.response-header.resp)  ~
+        ::  find which server had this wire and get its oauth provider
+        =/  srv-list=(list [server-id:mcp-proxy mcp-server:mcp-proxy])
+          %+  skim  ~(tap by servers)
+          |=([* s=mcp-server:mcp-proxy] ?=(^ oauth-provider.s))
+        %+  murn  srv-list
+        |=  [sid=server-id:mcp-proxy srv=mcp-server:mcp-proxy]
+        ?~  oauth-provider.srv  ~
+        %-  some
+        [%pass /oauth-refresh/[u.oauth-provider.srv] %agent [our.bowl %oauth] %poke %oauth-action !>(`action:oauth`[%force-refresh u.oauth-provider.srv])]
       =/  mcp-resp=@t
         %-  en:json:html
         %-  pairs:enjs:format
@@ -741,10 +858,12 @@
       =/  bod=(unit octs)  `(as-octs:mimes:html mcp-resp)
       :_  this
       =/  =path  /http-response/[u.eid]
-      :~  [%give %fact ~[path] %http-response-header !>(`response-header:http`[200 resp-headers])]
-          [%give %fact ~[path] %http-response-data !>(bod)]
-          [%give %kick ~[path] ~]
-      ==
+      =/  http-cards=(list card)
+        :~  [%give %fact ~[path] %http-response-header !>(`response-header:http`[200 resp-headers])]
+            [%give %fact ~[path] %http-response-data !>(bod)]
+            [%give %kick ~[path] ~]
+        ==
+      (weld http-cards refresh-cards)
     ::  for proxy calls, forward upstream response as-is
     =/  resp-headers=(list [key=@t value=@t])
       %+  weld  ~[cors ['access-control-expose-headers' 'Mcp-Session-Id']]
@@ -861,6 +980,94 @@
 ++  spec-to-tools
   |=  [sid=server-id:mcp-proxy spec=json]
   ^-  (list json)
+  ::  detect format: Google Discovery vs OpenAPI
+  =/  kind=@t  (get-json-string spec 'kind')
+  ?:  =(kind 'discovery#restDescription')
+    (discovery-to-tools spec)
+  (openapi-to-tools spec)
+::
+::  convert Google Discovery Document to MCP tools
+::
+++  discovery-to-tools
+  |=  spec=json
+  ^-  (list json)
+  =/  resources=json  (get-json-field spec 'resources')
+  ?.  ?=(%o -.resources)  ~
+  =/  res  (mule |.((walk-discovery-resources resources)))
+  ?:(?=(%& -.res) p.res ~)
+::
+++  walk-discovery-resources
+  |=  resources=json
+  ^-  (list json)
+  ?~  resources  ~
+  ?.  ?=(%o -.resources)  ~
+  %-  zing
+  %+  turn  ~(tap by p.resources)
+  |=  [rname=@t robj=json]
+  ?~  robj  ~
+  ?.  ?=(%o -.robj)  ~
+  =/  methods=json  (get-json-field robj 'methods')
+  =/  method-tools=(list json)
+    ?~  methods  ~
+    ?.  ?=(%o -.methods)  ~
+    %+  murn  ~(tap by p.methods)
+    |=  [mname=@t mobj=json]
+    ^-  (unit json)
+    ?~  mobj  ~
+    ?.  ?=(%o -.mobj)  ~
+    =/  op-id=@t  (get-json-string mobj 'id')
+    ?:  =('' op-id)  ~
+    =/  desc=@t  (get-json-string mobj 'description')
+    =/  params-obj=json  (get-json-field mobj 'parameters')
+    =/  props=(map @t json)  ~
+    =/  reqs=(list json)  ~
+    =?  props  &(?=(^ params-obj) ?=(%o -.params-obj))
+      %-  ~(gas by props)
+      %+  murn  ~(tap by p.params-obj)
+      |=  [pname=@t pobj=json]
+      ^-  (unit [@t json])
+      ?~  pobj  ~
+      ?.  ?=(%o -.pobj)  ~
+      =/  ptype=@t  (get-json-string pobj 'type')
+      =/  pdesc=@t  (get-json-string pobj 'description')
+      =/  prop=(map @t json)
+        (~(put by *(map @t json)) 'type' s+?:(=('' ptype) 'string' ptype))
+      =?  prop  !=('' pdesc)
+        (~(put by prop) 'description' s+pdesc)
+      `[pname [%o prop]]
+    =?  reqs  &(?=(^ params-obj) ?=(%o -.params-obj))
+      %+  murn  ~(tap by p.params-obj)
+      |=  [pname=@t pobj=json]
+      ?~  pobj  ~
+      ?.  ?=(%o -.pobj)  ~
+      ?.  =([~ %b %.y] (~(get by p.pobj) 'required'))  ~
+      `s+pname
+    =/  has-req=?  (~(has by p.mobj) 'request')
+    =?  props  has-req
+      (~(put by props) 'body' [%o (~(put by *(map @t json)) 'type' s+'string')])
+    %-  some
+    %-  pairs:enjs:format
+    :~  ['name' s+op-id]
+        ['description' s+desc]
+        :-  'inputSchema'
+        %-  pairs:enjs:format
+        :~  ['type' s+'object']
+            ['properties' [%o props]]
+            ['required' [%a reqs]]
+        ==
+    ==
+  =/  sub-resources=json  (get-json-field robj 'resources')
+  =/  sub-tools=(list json)
+    ?~  sub-resources  ~
+    ?.  ?=(%o -.sub-resources)  ~
+    (walk-discovery-resources sub-resources)
+  (weld method-tools sub-tools)
+::
+::  convert OpenAPI spec to MCP tools
+::
+++  openapi-to-tools
+  |=  spec=json
+  ^-  (list json)
   =/  paths=json  (get-json-field spec 'paths')
   ?.  ?=(%o -.paths)  ~
   =/  result=(list json)  ~
@@ -914,6 +1121,9 @@
 ++  find-operation
   |=  [spec=json op-id=@t]
   ^-  (unit [path=@t method=@t operation=json])
+  =/  kind=@t  (get-json-string spec 'kind')
+  ?:  =(kind 'discovery#restDescription')
+    (find-discovery-operation spec op-id)
   =/  paths=json  (get-json-field spec 'paths')
   ?.  ?=(%o -.paths)  ~
   =/  items=(list [@t json])  ~(tap by p.paths)
@@ -937,6 +1147,46 @@
   $(items t.items)
 ::
 ::  build an HTTP request URL from an OpenAPI path template + args
+::
+++  find-discovery-operation
+  |=  [spec=json op-id=@t]
+  ^-  (unit [path=@t method=@t operation=json])
+  =/  resources=json  (get-json-field spec 'resources')
+  ?.  ?=(%o -.resources)  ~
+  (search-discovery-resources resources op-id)
+::
+++  search-discovery-resources
+  |=  [resources=json op-id=@t]
+  ^-  (unit [path=@t method=@t operation=json])
+  ?.  ?=(%o -.resources)  ~
+  =/  items=(list [@t json])  ~(tap by p.resources)
+  |-
+  ?~  items  ~
+  =/  [rname=@t robj=json]  i.items
+  ?.  ?=(%o -.robj)  $(items t.items)
+  ::  check methods
+  =/  methods=json  (get-json-field robj 'methods')
+  =/  found=(unit [path=@t method=@t operation=json])
+    ?.  ?=(%o -.methods)  ~
+    =/  ml=(list [@t json])  ~(tap by p.methods)
+    |-
+    ?~  ml  ~
+    =/  [mname=@t mobj=json]  i.ml
+    ?.  ?=(%o -.mobj)  $(ml t.ml)
+    =/  mid=@t  (get-json-string mobj 'id')
+    ?.  =(mid op-id)  $(ml t.ml)
+    =/  http-method=@t  (get-json-string mobj 'httpMethod')
+    =/  mpath=@t
+      =/  fp=@t  (get-json-string mobj 'flatPath')
+      ?:(=('' fp) (get-json-string mobj 'path') fp)
+    `[mpath http-method mobj]
+  ?^  found  found
+  ::  recurse sub-resources
+  =/  sub=json  (get-json-field robj 'resources')
+  =/  sub-found=(unit [path=@t method=@t operation=json])
+    (search-discovery-resources sub op-id)
+  ?^  sub-found  sub-found
+  $(items t.items)
 ::
 ++  build-api-url
   |=  [base=@t path-template=@t args=json]
@@ -989,6 +1239,33 @@
   |-
   ?~  rest  (cat 3 '?' result)
   $(result (cat 3 result (cat 3 '&' i.rest)), rest t.rest)
+::
+++  get-spec-base-url
+  |=  spec=json
+  ^-  @t
+  =/  kind=@t  (get-json-string spec 'kind')
+  ?:  =(kind 'discovery#restDescription')
+    ::  Google Discovery: use baseUrl or rootUrl
+    =/  base=@t  (get-json-string spec 'baseUrl')
+    ?:(=('' base) (get-json-string spec 'rootUrl') base)
+  ::  OpenAPI: use servers[0].url
+  =/  servers=json  (get-json-field spec 'servers')
+  ?.  ?=(%a -.servers)  ''
+  ?~  p.servers  ''
+  (get-json-string i.p.servers 'url')
+::
+++  apply-tool-filter
+  |=  [sid=server-id:mcp-proxy tools=(list json) filters=(map server-id:mcp-proxy tool-filter:mcp-proxy)]
+  ^-  (list json)
+  =/  filt=(unit tool-filter:mcp-proxy)  (~(get by filters) sid)
+  ?~  filt  tools
+  %+  skim  tools
+  |=  tool=json
+  =/  tool-name=@t  (get-json-string tool 'name')
+  ?-  mode.u.filt
+    %allow  (~(has in tools.u.filt) tool-name)
+    %block  !(~(has in tools.u.filt) tool-name)
+  ==
 ::
 ++  extract-path-params
   |=  path-template=@t
@@ -1053,15 +1330,12 @@
   |=  [oauth-prov=(unit @tas) our=@p now=@da]
   ^-  (unit [key=@t value=@t])
   ?~  oauth-prov  ~
-  =/  has=?
-    =/  res  (mule |.(.^(? %gx /(scot %p our)/oauth/(scot %da now)/has-grant/[u.oauth-prov]/noun)))
-    ?:(?=(%& -.res) p.res %.n)
-  ?.  has  ~
-  =/  gra=(unit grant:oauth)
-    =/  res  (mule |.(.^(grant:oauth %gx /(scot %p our)/oauth/(scot %da now)/grant/[u.oauth-prov]/noun)))
-    ?:(?=(%& -.res) `p.res ~)
-  ?~  gra  ~
-  `['authorization' (rap 3 ~[token-type.u.gra ' ' access-token.u.gra])]
+  ::  use the auth-header scry which checks expiry
+  =/  hdr=@t
+    =/  res  (mule |.(.^(@t %gx /(scot %p our)/oauth/(scot %da now)/auth-header/[u.oauth-prov]/noun)))
+    ?:(?=(%& -.res) p.res '')
+  ?:  =('' hdr)  ~
+  `['authorization' hdr]
 ::
 ++  strip-sse
   |=  body=@t
@@ -1161,6 +1435,20 @@
     [%toggle-server `@tas`((ot ~[id+so]) jon)]
       %'refresh-spec'
     [%refresh-spec `@tas`((ot ~[id+so]) jon)]
+      %'set-tool-filter'
+    =/  id=@t  (get-json-string jon 'id')
+    =/  fmode=@t  (get-json-string jon 'mode')
+    =/  tool-list=(list json)
+      =/  v=json  (get-json-field jon 'tools')
+      ?.  ?=(%a -.v)  ~
+      p.v
+    =/  tool-set=(set @t)
+      %-  silt
+      %+  murn  tool-list
+      |=(j=json ?.(?=(%s -.j) ~ `p.j))
+    [%set-tool-filter `@tas`id [?:(?=(%'allow' fmode) %allow %block) tool-set]]
+      %'clear-tool-filter'
+    [%clear-tool-filter `@tas`((ot ~[id+so]) jon)]
       %'login-server'
     [%login-server `@tas`((ot ~[id+so]) jon)]
   ==

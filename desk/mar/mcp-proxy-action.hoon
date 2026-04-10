@@ -70,6 +70,12 @@
         %'refresh-spec'
       [%refresh-spec `@tas`((ot ~[id+so]) jon)]
     ::
+        %'set-tool-filter'
+      [%set-tool-filter `@tas`((ot ~[id+so]) jon) [%block ~]]
+    ::
+        %'clear-tool-filter'
+      [%clear-tool-filter `@tas`((ot ~[id+so]) jon)]
+    ::
         %'login-server'
       [%login-server `@tas`((ot ~[id+so]) jon)]
     ==
