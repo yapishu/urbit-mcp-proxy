@@ -66,7 +66,7 @@ var App = {
       var mode = form.elements.mode.value;
       var oauthProv = form.elements['oauth-provider'].value || null;
       var schemaUrl = form.elements['schema-url'] ? form.elements['schema-url'].value.trim() : '';
-      if (!id || !name || !url) return;
+      if (!id || !name || (mode !== 'openapi' && !url)) return;
       McpProxyAPI.addServer(id, name, url, headers, {mode: mode, oauthProvider: oauthProv, schemaUrl: schemaUrl || null}).then(function() {
         form.reset();
         document.getElementById('add-schema-row').style.display = 'none';
@@ -130,8 +130,10 @@ var App = {
     var mode = document.getElementById(prefix + '-mode').value;
     var row = document.getElementById(prefix + '-schema-row');
     var hint = document.getElementById(prefix + '-url-hint');
+    var urlInput = document.getElementById(prefix + '-url');
     if (row) row.style.display = mode === 'openapi' ? '' : 'none';
-    if (hint) hint.textContent = mode === 'openapi' ? 'API base URL (e.g. https://api.x.com)' : 'Upstream MCP server endpoint';
+    if (hint) hint.textContent = mode === 'openapi' ? 'API base URL (optional - derived from spec if empty)' : 'Upstream MCP server endpoint';
+    if (urlInput) urlInput.required = mode !== 'openapi';
   },
 
   editServer: function(id) { this.editing = id; this.render(); this.populateOAuthSelects(); },
@@ -159,6 +161,85 @@ var App = {
       App.toast('Fetching spec...');
       setTimeout(function() { App.loadAll(); }, 3000);
     }).catch(function(e) { alert('Failed: ' + e.message); });
+  },
+
+  showTools: function(id) {
+    var self = this;
+    McpProxyAPI.getTools(id).then(function(data) {
+      var tools = data.tools || [];
+      var s = self.servers.find(function(x) { return x.id === id; });
+      var filter = s && s.toolFilter ? s.toolFilter : null;
+      var blockedSet = new Set(filter && filter.mode === 'block' ? filter.tools : []);
+      var allowedSet = new Set(filter && filter.mode === 'allow' ? filter.tools : []);
+      var isAllowMode = filter && filter.mode === 'allow';
+
+      var html = '<div class="tool-list-panel" id="tools-' + id + '">';
+      html += '<div class="tool-list-header"><span>' + tools.length + ' tools';
+      if (filter) html += ' <span class="badge proxy-badge">' + filter.mode + ' filter</span>';
+      html += '</span><span>' +
+        '<button class="secondary" onclick="App.setAllTools(\'' + id + '\',true)">All</button> ' +
+        '<button class="secondary" onclick="App.setAllTools(\'' + id + '\',false)">None</button> ' +
+        '<button class="secondary" onclick="App.hideTools(\'' + id + '\')">Close</button>' +
+        '</span></div>';
+      html += '<div class="tool-list-items">';
+      for (var i = 0; i < tools.length; i++) {
+        var t = tools[i];
+        var isBlocked = isAllowMode ? !allowedSet.has(t.name) : blockedSet.has(t.name);
+        html += '<div class="tool-item ' + (isBlocked ? 'blocked' : '') + '">' +
+          '<label><input type="checkbox" ' + (isBlocked ? '' : 'checked') +
+          ' onchange="App.toggleTool(\'' + id + '\',\'' + self.esc(t.name) + '\',this.checked)">' +
+          '<span class="tool-name">' + self.esc(t.name) + '</span></label>' +
+          '<span class="tool-desc">' + self.esc((t.description || '').substring(0, 80)) + '</span></div>';
+      }
+      html += '</div></div>';
+
+      var container = document.getElementById('server-tools-' + id);
+      if (container) container.innerHTML = html;
+    }).catch(function(e) { alert('Failed to load tools: ' + e.message); });
+  },
+
+  setAllTools: function(id, enabled) {
+    var self = this;
+    if (enabled) {
+      McpProxyAPI.clearToolFilter(id).then(function() {
+        self.loadAll();
+        self.showTools(id);
+      });
+    } else {
+      // block all: get tool list, block everything
+      McpProxyAPI.getTools(id).then(function(data) {
+        var tools = (data.tools || []).map(function(t) { return t.name; });
+        McpProxyAPI.setToolFilter(id, 'block', tools).then(function() {
+          self.loadAll();
+          self.showTools(id);
+        });
+      });
+    }
+  },
+
+  hideTools: function(id) {
+    var container = document.getElementById('server-tools-' + id);
+    if (container) container.innerHTML = '';
+  },
+
+  toggleTool: function(serverId, toolName, enabled) {
+    var self = this;
+    var s = this.servers.find(function(x) { return x.id === serverId; });
+    var filter = s && s.toolFilter ? s.toolFilter : { mode: 'block', tools: [] };
+    var toolSet = new Set(filter.tools || []);
+
+    if (filter.mode === 'block') {
+      if (enabled) toolSet.delete(toolName); else toolSet.add(toolName);
+    } else {
+      if (enabled) toolSet.add(toolName); else toolSet.delete(toolName);
+    }
+
+    var tools = Array.from(toolSet);
+    if (tools.length === 0) {
+      McpProxyAPI.clearToolFilter(serverId).then(function() { self.loadAll(); });
+    } else {
+      McpProxyAPI.setToolFilter(serverId, filter.mode, tools).then(function() { self.loadAll(); });
+    }
   },
 
   toggleServer: function(id) {
@@ -252,10 +333,13 @@ var App = {
         headersHtml + specHtml + oauthHtml +
         '<div class="server-actions">' +
           '<button onclick="App.editServer(\'' + s.id + '\')">Edit</button>' +
+          '<button class="secondary" onclick="App.showTools(\'' + s.id + '\')">Tools</button>' +
           (s.mode === 'openapi' ? '<button class="secondary" onclick="App.refreshSpec(\'' + s.id + '\')">Reload Schema</button>' : '') +
           '<button onclick="App.toggleServer(\'' + s.id + '\')">' + (s.enabled ? 'Disable' : 'Enable') + '</button>' +
           '<button class="danger" onclick="App.removeServer(\'' + s.id + '\')">Remove</button>' +
-        '</div></div>';
+        '</div>' +
+        '<div id="server-tools-' + s.id + '"></div>' +
+        '</div>';
     }
     container.innerHTML = html;
     if (this.editing) {

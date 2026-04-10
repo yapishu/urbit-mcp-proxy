@@ -71,6 +71,7 @@
       [%connect id=provider-id]
       [%disconnect id=provider-id]
       [%revoke id=provider-id]
+      [%force-refresh id=provider-id]
   ==
 ::
 +$  update
