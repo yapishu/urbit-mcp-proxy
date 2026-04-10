@@ -85,6 +85,7 @@ window.OAuthAPI = {
   getGrants: function() { return this.get('/grants'); },
 
   addProvider: function(data) { return this.post(data); },
+  updateProvider: function(data) { return this.post(data); },
   removeProvider: function(id) { return this.post({ action: 'remove-provider', id: id }); },
   connect: function(id) { return this.post({ action: 'connect', id: id }); },
   disconnect: function(id) { return this.post({ action: 'disconnect', id: id }); }

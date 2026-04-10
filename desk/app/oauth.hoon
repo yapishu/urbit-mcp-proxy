@@ -86,7 +86,12 @@
       `this
     ::
         %update-provider
-      =.  providers  (~(put by providers) id.act config.act)
+      ::  preserve existing client-secret if the new one is empty
+      =/  existing=(unit provider-config:oauth)  (~(get by providers) id.act)
+      =/  new-cfg=provider-config:oauth  config.act
+      =?  new-cfg  ?&(?=(^ existing) =('' client-secret.new-cfg))
+        new-cfg(client-secret client-secret.u.existing)
+      =.  providers  (~(put by providers) id.act new-cfg)
       `this
     ::
         %connect
@@ -803,7 +808,13 @@
           ['name' s+(scot %tas pid)]
           ['authUrl' s+auth-url.cfg]
           ['tokenUrl' s+token-url.cfg]
+          :-  'revokeUrl'
+          ?~  revoke-url.cfg  ~
+          s+u.revoke-url.cfg
+          ['clientId' s+client-id.cfg]
+          ['redirectUri' s+redirect-uri.cfg]
           ['scopes' s+scopes.cfg]
+          ['hasSecret' b+!=('' client-secret.cfg)]
           ['hasGrant' b+(~(has by grants) pid)]
       ==
   ==
